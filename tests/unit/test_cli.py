@@ -1,4 +1,4 @@
-"""Tests for CLI entry points (__main__.py).
+"""Tests for CLI entry points.
 
 Uses Click's CliRunner to test all CLI commands without
 actually connecting to BigQuery. Tests verify:
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from bq_entity_resolution.__main__ import cli
+from bq_entity_resolution.cli.main import cli
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 SAMPLE_CONFIG = str(FIXTURES_DIR / "sample_config.yml")

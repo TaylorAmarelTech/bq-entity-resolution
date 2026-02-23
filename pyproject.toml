@@ -40,6 +40,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1.0",
     "structlog>=24.0.0",
+    "Jinja2>=3.1.0",
     "sqlglot>=20.0.0",
 ]
 
@@ -63,7 +64,7 @@ Issues = "https://github.com/bq-entity-resolution/bq-entity-resolution/issues"
 Changelog = "https://github.com/bq-entity-resolution/bq-entity-resolution/blob/main/CHANGELOG.md"
 
 [project.scripts]
-bq-er = "bq_entity_resolution.__main__:cli"
+bq-er = "bq_entity_resolution.cli.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
