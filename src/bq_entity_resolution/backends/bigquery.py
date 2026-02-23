@@ -43,22 +43,40 @@ class BigQueryBackend:
 
     Delegates to the existing BigQueryClient which handles retries,
     job labeling, dry-run support, and structured logging.
+
+    Can be constructed with a pre-built BigQueryClient or with
+    individual connection parameters.
     """
 
     def __init__(
         self,
-        project: str,
+        project: str | BigQueryClient | None = None,
         location: str = "US",
         dry_run: bool = False,
         max_bytes_billed: int | None = None,
+        *,
+        client: BigQueryClient | None = None,
     ):
-        self._client = BigQueryClient(
-            project=project,
-            location=location,
-            dry_run=dry_run,
-            max_bytes_billed=max_bytes_billed,
-        )
-        self._project = project
+        # Accept a pre-built client via keyword or positional arg
+        if isinstance(project, BigQueryClient):
+            self._client = project
+            self._project = project.project
+        elif client is not None:
+            self._client = client
+            self._project = client.project
+        elif isinstance(project, str):
+            self._client = BigQueryClient(
+                project=project,
+                location=location,
+                dry_run=dry_run,
+                max_bytes_billed=max_bytes_billed,
+            )
+            self._project = project
+        else:
+            raise TypeError(
+                "BigQueryBackend requires either project: str or "
+                "client: BigQueryClient"
+            )
 
     @property
     def dialect(self) -> str:

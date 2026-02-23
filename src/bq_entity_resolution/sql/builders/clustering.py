@@ -50,6 +50,7 @@ class ClusterMetricsParams:
     """Parameters for cluster quality metrics SQL generation."""
     cluster_table: str
     matches_table: str
+    source_table: str = ""  # Featured table with source_name column
 
 
 def build_cluster_assignment_sql(params: ClusteringParams) -> SQLExpression:
@@ -291,14 +292,28 @@ def build_cluster_quality_metrics_sql(
     """
     lines: list[str] = []
 
-    lines.append("WITH cluster_stats AS (")
-    lines.append("  SELECT")
-    lines.append(f"    {CLUSTER_ID},")
-    lines.append("    COUNT(*) AS cluster_size,")
-    lines.append(f"    COUNT(DISTINCT {SOURCE_NAME}) AS source_count")
-    lines.append(f"  FROM `{params.cluster_table}`")
-    lines.append(f"  GROUP BY {CLUSTER_ID}")
-    lines.append("),")
+    # Join cluster table with source table for source_name if available
+    if params.source_table:
+        lines.append("WITH cluster_stats AS (")
+        lines.append("  SELECT")
+        lines.append(f"    c.{CLUSTER_ID},")
+        lines.append("    COUNT(*) AS cluster_size,")
+        lines.append(f"    COUNT(DISTINCT s.{SOURCE_NAME}) AS source_count")
+        lines.append(f"  FROM `{params.cluster_table}` c")
+        lines.append(f"  LEFT JOIN `{params.source_table}` s")
+        lines.append(f"    ON c.{ENTITY_UID} = s.{ENTITY_UID}")
+        lines.append(f"  GROUP BY c.{CLUSTER_ID}")
+        lines.append("),")
+    else:
+        lines.append("WITH cluster_stats AS (")
+        lines.append("  SELECT")
+        lines.append(f"    {CLUSTER_ID},")
+        lines.append("    COUNT(*) AS cluster_size,")
+        lines.append("    1 AS source_count")
+        lines.append(f"  FROM `{params.cluster_table}`")
+        lines.append(f"  GROUP BY {CLUSTER_ID}")
+        lines.append("),")
+
     lines.append("confidence_stats AS (")
     lines.append("  SELECT")
     lines.append(f"    AVG({MATCH_CONFIDENCE}) AS {CLUSTER_METRIC_AVG_CONFIDENCE},")

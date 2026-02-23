@@ -1,0 +1,137 @@
+# Cross-Source Person Linkage Example
+#
+# Links records across two source systems (CRM and ERP) to find
+# the same person appearing in both. Uses comparison_pool to define
+# comparisons once and reference them across tiers.
+#
+# Usage:
+#   export BQ_PROJECT=your-gcp-project
+#   bq-er validate --config config/examples/person_linkage.yml
+#   bq-er preview-sql --config config/examples/person_linkage.yml --tier exact --stage all
+
+version: "1.0"
+
+project:
+  name: person_linkage
+  bq_project: "${BQ_PROJECT}"
+
+# Link records across sources (no within-source dedup)
+link_type: link_only
+
+sources:
+  - name: crm
+    table: "${BQ_PROJECT}.raw.crm_contacts"
+    unique_key: contact_id
+    updated_at: updated_at
+    columns:
+      - name: contact_id
+        type: STRING
+      - name: first_name
+        type: STRING
+      - name: last_name
+        type: STRING
+      - name: email
+        type: STRING
+      - name: phone
+        type: STRING
+      - name: updated_at
+        type: TIMESTAMP
+
+  - name: erp
+    table: "${BQ_PROJECT}.raw.erp_customers"
+    unique_key: customer_id
+    updated_at: last_modified
+    columns:
+      - name: customer_id
+        type: STRING
+      - name: first_name
+        type: STRING
+      - name: last_name
+        type: STRING
+      - name: email
+        type: STRING
+      - name: phone
+        type: STRING
+      - name: last_modified
+        type: TIMESTAMP
+
+feature_engineering:
+  name_features:
+    features:
+      - name: first_name_clean
+        function: name_clean
+        input: first_name
+      - name: last_name_clean
+        function: name_clean
+        input: last_name
+      - name: last_name_soundex
+        function: soundex
+        input: last_name_clean
+
+  contact_features:
+    features:
+      - name: email_clean
+        function: lower_trim
+        input: email
+      - name: phone_clean
+        function: phone_standardize
+        input: phone
+
+  blocking_keys:
+    - name: bk_email
+      function: farm_fingerprint
+      inputs: [email_clean]
+    - name: bk_name
+      function: farm_fingerprint_concat
+      inputs: [last_name_soundex, first_name_clean]
+
+# Define comparisons once, reuse across tiers
+comparison_pool:
+  email_exact:
+    left: email_clean
+    right: email_clean
+    method: exact
+    weight: 5.0
+  first_name_jw:
+    left: first_name_clean
+    right: first_name_clean
+    method: jaro_winkler
+    params: { threshold: 0.85 }
+    weight: 3.0
+  last_name_exact:
+    left: last_name_clean
+    right: last_name_clean
+    method: exact
+    weight: 3.0
+  phone_exact:
+    left: phone_clean
+    right: phone_clean
+    method: exact
+    weight: 4.0
+
+matching_tiers:
+  # Tier 1: High-confidence exact matches
+  - name: exact
+    blocking:
+      paths:
+        - keys: [bk_email]
+    comparisons:
+      - ref: email_exact
+      - ref: last_name_exact
+      - ref: first_name_jw
+    threshold:
+      min_score: 8.0
+
+  # Tier 2: Fuzzy matches on name + phone
+  - name: fuzzy
+    blocking:
+      paths:
+        - keys: [bk_name]
+    comparisons:
+      - ref: first_name_jw
+      - ref: last_name_exact
+      - ref: phone_exact
+      - ref: email_exact
+        weight: 2.0  # Lower weight for email in fuzzy tier
+    threshold:
+      min_score: 7.0

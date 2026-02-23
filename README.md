@@ -1,178 +1,66 @@
 # bq-entity-resolution
 
-A configurable, multi-tier entity resolution pipeline for Google BigQuery. Python orchestrates configuration, validation, and SQL generation; BigQuery executes all data processing. Everything is driven by YAML configuration.
+[![PyPI version](https://img.shields.io/pypi/v/bq-entity-resolution.svg)](https://pypi.org/project/bq-entity-resolution/)
+[![Python](https://img.shields.io/pypi/pyversions/bq-entity-resolution.svg)](https://pypi.org/project/bq-entity-resolution/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-929%20passing-brightgreen.svg)]()
 
-## What It Does
+A configurable, multi-tier entity resolution pipeline for Google BigQuery. Python handles configuration and SQL generation; BigQuery executes all data processing. No data leaves the warehouse.
 
-Matches and deduplicates entity records (people, companies, insurance claims, healthcare patients, financial transactions) across one or more BigQuery source tables using progressive blocking and probabilistic matching, producing a gold-layer resolved entity table with cluster assignments and canonical record election.
+## Why This Tool?
 
-**Key capabilities:**
+| Feature | bq-entity-resolution | Splink | dedupe | recordlinkage |
+|---------|---------------------|--------|--------|----------------|
+| **Zero data movement** | All compute in BigQuery | Spark/DuckDB (data leaves warehouse) | Local Python (must export) | Local pandas |
+| **Config-driven** | YAML-first, no Python required | Python scripting | Python scripting | Python scripting |
+| **Multi-tier matching** | Exact -> fuzzy -> probabilistic cascade | Single pass | Single pass | Single pass |
+| **Incremental processing** | Watermarks + cross-batch clustering | Full reprocess | Full reprocess | Full reprocess |
+| **Scale** | Billions of records (BigQuery native) | Millions (Spark) | Millions | Thousands |
+| **Local testing** | DuckDB backend, no credentials needed | DuckDB | N/A | N/A |
+| **Progressive disclosure** | 5-line quick start -> 500-line production | Moderate | Simple | Simple |
 
-- Multi-tier matching (exact, fuzzy edit distance, phonetic, token-based, embedding similarity)
-- Multi-path blocking with per-path candidate limits to control search space
-- LSH (Locality-Sensitive Hashing) blocking for embedding-based matching
-- 60+ built-in feature functions (name cleaning, address standardization, phone normalization, nickname resolution, etc.)
-- 30+ comparison methods (exact, Levenshtein, Jaro-Winkler, Soundex, cosine similarity, token overlap, etc.)
-- Fellegi-Sunter probabilistic matching with EM parameter estimation
-- Active learning with review queue generation and label ingestion
-- Hard negative disqualification and soft signal scoring
-- Connected components clustering with canonical record election (4 strategies)
-- Incremental processing with runtime watermarks, grace periods, and checkpoint/resume
-- Pluggable backends (BigQuery for production, DuckDB for local testing)
-- DAG-based pipeline with compile-time contract validation and runtime quality gates
-- Column profiling and weight sensitivity analysis
-- Docker-packaged for production deployment
+## Install
 
-## Architecture
+```bash
+pip install bq-entity-resolution
 
-```
-                    ┌─────────────────────────────────────────┐
-                    │               YAML Config                │
-                    │  (sources, features, blocking, tiers)    │
-                    └───────────────────┬─────────────────────┘
-                                        │
-                           ┌────────────▼────────────┐
-                           │   Pydantic v2 Schema     │
-                           │   28 config models       │
-                           │   + cross-field checks   │
-                           └────────────┬────────────┘
-                                        │
-              ┌─────────────────────────▼─────────────────────────┐
-              │                    Pipeline                        │
-              │  (recommended entry point: Pipeline(config).run()) │
-              │                                                    │
-              │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │
-              │  │ StageDAG │→ │  Plan    │→ │    Executor      │ │
-              │  │ (topo    │  │ (immut.  │  │ (quality gates,  │ │
-              │  │  sort)   │  │  SQL)    │  │  checkpoints)    │ │
-              │  └──────────┘  └──────────┘  └──────────────────┘ │
-              └───────────────────────┬───────────────────────────┘
-                                      │
-        ┌─────────────────────────────▼─────────────────────────────┐
-        │                       Stages (8 types)                     │
-        │                                                            │
-        │  Staging → Features → Blocking → Matching → Clustering     │
-        │                 TermFreq    (per tier)     GoldOutput      │
-        │                                            ActiveLearning  │
-        │                                                            │
-        │  Each stage: inputs/outputs → plan() → list[SQLExpression] │
-        └─────────────────────────────┬─────────────────────────────┘
-                                      │
-        ┌─────────────────────────────▼─────────────────────────────┐
-        │               SQL Builders (14 modules, 30 functions)      │
-        │                                                            │
-        │  Frozen @dataclass params → build_*() → SQLExpression      │
-        │  Type-safe, unit-testable, no Jinja2 templates             │
-        │                                                            │
-        │  staging · features · blocking · comparison · clustering    │
-        │  gold_output · golden_record · em · embeddings             │
-        │  active_learning · watermark · udf · monitoring            │
-        └─────────────────────────────┬─────────────────────────────┘
-                                      │ SQL
-        ┌─────────────────────────────▼─────────────────────────────┐
-        │                   Backend (pluggable)                      │
-        │                                                            │
-        │  BigQueryBackend  │  DuckDBBackend  │  BQEmulatorBackend   │
-        │  (production)     │  (local test)   │  (Docker emulator)   │
-        └───────────────────────────────────────────────────────────┘
-                                      │
-        ┌─────────────────────────────▼─────────────────────────────┐
-        │                   BigQuery / DuckDB                        │
-        │                                                            │
-        │  Bronze: staged_{source} tables (incremental load)         │
-        │  Silver: featured, candidates, matches, clusters           │
-        │  Gold:   resolved_entities (final output)                  │
-        └───────────────────────────────────────────────────────────┘
+# With DuckDB for local testing (no BigQuery credentials needed):
+pip install "bq-entity-resolution[local]"
+
+# For development:
+pip install -e ".[dev,local]"
 ```
 
 ## Quick Start
 
-### Install
-
-```bash
-pip install -e .
-# or with dev dependencies:
-pip install -e ".[dev]"
-# or with DuckDB for local testing:
-pip install -e ".[local]"
-```
-
-### 5-Line Config (Progressive Disclosure)
+### 5-Line Python Config
 
 ```python
-from bq_entity_resolution.config.presets import quick_config
+from bq_entity_resolution import quick_config, Pipeline
 
 config = quick_config(
-    project="my-gcp-project",
-    dataset="entity_resolution",
-    sources={"customers": "my-gcp-project.raw.customers"},
-    columns={"first_name": "first_name", "last_name": "last_name", "email": "email"},
+    bq_project="my-gcp-project",
+    source_table="my-gcp-project.raw.customers",
+    columns=["first_name", "last_name", "email", "phone"],
 )
+
+pipeline = Pipeline(config)
+plan = pipeline.plan()
+print(plan.preview())  # See all generated SQL
 ```
 
-### Validate Configuration
+### YAML Config
 
-```bash
-bq-er validate --config config/examples/customer_dedup.yml
-```
-
-### Preview Generated SQL
-
-```bash
-bq-er preview-sql --config config/examples/customer_dedup.yml --tier fuzzy_name_address
-```
-
-### Run the Pipeline
-
-```bash
-# Full refresh (reprocess everything)
-bq-er run --config my_config.yml --full-refresh
-
-# Incremental (uses watermarks)
-bq-er run --config my_config.yml
-
-# Dry run (validate SQL against BigQuery without executing)
-bq-er run --config my_config.yml --dry-run
-
-# Run specific tiers only
-bq-er run --config my_config.yml --tier exact_identity --tier email_match
-```
-
-### Profile Columns for Weight Suggestions
-
-```bash
-bq-er profile --config my_config.yml
-```
-
-### Analyze Weight Sensitivity
-
-```bash
-bq-er analyze --config my_config.yml --tier fuzzy_name --mode contribution
-```
-
-### Docker
-
-```bash
-docker build -t bq-er .
-docker run -v ./config:/app/config/user -v ./secrets:/app/secrets \
-  bq-er run --config /app/config/user/my_config.yml
-```
-
-## Configuration
-
-Everything is driven by a single YAML file. Here's a minimal example:
+For full control, write a YAML config:
 
 ```yaml
 project:
   name: customer_dedup
-  bq_project: my-gcp-project
-  bq_dataset_bronze: dedup_bronze
-  bq_dataset_silver: dedup_silver
-  bq_dataset_gold: dedup_gold
+  bq_project: "${BQ_PROJECT}"
 
 sources:
   - name: customers
-    table: my-gcp-project.raw.customers
+    table: "${BQ_PROJECT}.raw.customers"
     unique_key: customer_id
     updated_at: updated_at
     columns:
@@ -223,33 +111,169 @@ matching_tiers:
       min_score: 6.0
 ```
 
-See `config/examples/` for full production configurations:
-- `insurance_entity.yml` — 7-tier insurance entity resolution with 80+ features
-- `customer_dedup.yml` — 3-tier CRM customer deduplication
-- `probabilistic_matching.yml` — Fellegi-Sunter probabilistic with EM training
+### Validate and Preview
 
-### Configuration Presets
+```bash
+bq-er validate --config my_config.yml
+bq-er preview-sql --config my_config.yml --tier exact_match --stage all
+```
 
-For common use cases, presets provide out-of-the-box configurations:
+### Run the Pipeline
+
+```bash
+# Full refresh (reprocess everything)
+bq-er run --config my_config.yml --full-refresh
+
+# Incremental (uses watermarks)
+bq-er run --config my_config.yml
+
+# Dry run (generate SQL without executing)
+bq-er run --config my_config.yml --dry-run
+
+# Run specific tiers only
+bq-er run --config my_config.yml --tier exact_match --tier fuzzy_name
+```
+
+### Local Testing with DuckDB
+
+Run the full pipeline locally without BigQuery credentials:
 
 ```python
-from bq_entity_resolution.config.presets import person_dedup_preset
+from bq_entity_resolution import Pipeline, load_config
+from bq_entity_resolution.backends.duckdb import DuckDBBackend
+
+config = load_config("my_config.yml")
+pipeline = Pipeline(config)
+result = pipeline.run(backend=DuckDBBackend())
+print(f"Completed: {result.completed_stages}")
+```
+
+## Configuration Presets
+
+For common use cases, presets auto-generate features, blocking keys, and comparisons from column roles:
+
+```python
+from bq_entity_resolution import person_dedup_preset
 
 config = person_dedup_preset(
-    project="my-project",
-    dataset_prefix="er",
-    sources={"crm": "proj.raw.customers", "erp": "proj.raw.contacts"},
-    column_roles={
+    bq_project="my-gcp-project",
+    source_table="my-gcp-project.raw.customers",
+    columns={
         "first_name": "first_name",
         "last_name": "last_name",
         "date_of_birth": "dob",
-        "email": "email_address",
-        "phone": "phone_number",
+        "email": "email",
+        "phone": "phone",
     },
 )
 ```
 
-Available presets: `person_dedup_preset`, `person_linkage_preset`, `business_dedup_preset`, `insurance_dedup_preset`, `financial_transaction_preset`, `healthcare_patient_preset`.
+### Multi-Source Record Linkage
+
+Link records across two or more systems:
+
+```python
+from bq_entity_resolution import person_linkage_preset
+
+config = person_linkage_preset(
+    bq_project="my-gcp-project",
+    source_tables=[
+        {"name": "crm", "table": "my-gcp-project.raw.crm_contacts"},
+        {"name": "erp", "table": "my-gcp-project.raw.erp_customers"},
+    ],
+    columns={
+        "first_name": "first_name",
+        "last_name": "last_name",
+        "email": "email",
+        "phone": "phone",
+    },
+)
+```
+
+Available presets: `quick_config`, `person_dedup_preset`, `person_linkage_preset`, `business_dedup_preset`, `insurance_dedup_preset`, `financial_transaction_preset`, `healthcare_patient_preset`.
+
+## Comparison Pool
+
+Define comparisons once, reference across tiers:
+
+```yaml
+comparison_pool:
+  email_exact:
+    left: email_clean
+    right: email_clean
+    method: exact
+    weight: 5.0
+  name_jw:
+    left: first_name_clean
+    right: first_name_clean
+    method: jaro_winkler
+    params: { threshold: 0.85 }
+    weight: 3.0
+
+matching_tiers:
+  - name: exact
+    comparisons:
+      - ref: email_exact         # Use pool definition
+      - ref: name_jw
+    threshold: { min_score: 8.0 }
+  - name: fuzzy
+    comparisons:
+      - ref: email_exact
+      - ref: name_jw
+        weight: 1.5              # Override pool weight for this tier
+    threshold: { min_score: 3.0 }
+```
+
+## Architecture
+
+```
+                    +---------------------------------------------+
+                    |               YAML Config                    |
+                    |  (sources, features, blocking, tiers)        |
+                    +---------------------+-----------------------+
+                                          |
+                             +------------v------------+
+                             |   Pydantic v2 Schema     |
+                             |   28 config models       |
+                             |   + cross-field checks   |
+                             +------------+------------+
+                                          |
+              +---------------------------v---------------------------+
+              |                    Pipeline                           |
+              |  (entry point: Pipeline(config).run())                |
+              |                                                       |
+              |  +----------+  +----------+  +--------------------+  |
+              |  | StageDAG |->|  Plan    |->|    Executor        |  |
+              |  | (topo    |  | (immut.  |  | (quality gates,    |  |
+              |  |  sort)   |  |  SQL)    |  |  checkpoints)      |  |
+              |  +----------+  +----------+  +--------------------+  |
+              +---------------------------+---------------------------+
+                                          |
+        +---------------------------------v---------------------------------+
+        |                       Stages (10 types)                            |
+        |                                                                    |
+        |  Staging -> Features -> Blocking -> Matching -> Clustering         |
+        |                 TermFreq    (per tier)     GoldOutput              |
+        |                                            ActiveLearning          |
+        |                                            LabelIngestion          |
+        |                                                                    |
+        |  Each stage: inputs/outputs -> plan() -> list[SQLExpression]       |
+        +---------------------------------+---------------------------------+
+                                          |
+        +---------------------------------v---------------------------------+
+        |               SQL Builders (14 modules, 30 functions)              |
+        |                                                                    |
+        |  Frozen @dataclass params -> build_*() -> SQLExpression            |
+        |  Type-safe, unit-testable, no templates                            |
+        +---------------------------------+---------------------------------+
+                                          | SQL
+        +---------------------------------v---------------------------------+
+        |                   Backend (pluggable)                              |
+        |                                                                    |
+        |  BigQueryBackend  |  DuckDBBackend  |  BQEmulatorBackend           |
+        |  (production)     |  (local test)   |  (Docker emulator)           |
+        +-------------------------------------------------------------------+
+```
 
 ## Pipeline Stages
 
@@ -267,17 +291,6 @@ Available presets: `person_dedup_preset`, `person_linkage_preset`, `business_ded
 | 10. Active Learning | Silver | (Optional) Generate review queue for uncertain pairs |
 | 11. Watermark Advance | Meta | Update cursor positions on success |
 
-### Matching Tier Flow
-
-Each tier executes independently, in order:
-
-1. **Blocking** — Generate candidate pairs via equi-join on blocking keys (with per-path candidate limits). Pairs already matched in prior tiers are excluded.
-2. **Comparison** — Score each candidate pair using weighted comparison functions.
-3. **Hard Negatives** — Disqualify pairs that violate constraints (e.g., different entity types).
-4. **Soft Signals** — Bonus points for supporting evidence (e.g., matching phone area code).
-5. **Threshold** — Keep pairs above minimum score (`sum` or `fellegi_sunter` method).
-6. **Accumulate** — Append matches to the all-tiers matches table.
-
 ### Scoring Methods
 
 | Method | How It Works | When to Use |
@@ -294,75 +307,46 @@ Each tier executes independently, in order:
 | `source_priority` | Record from highest-priority source |
 | `field_merge` | Golden record assembled per-field from best source |
 
-## Extensibility
+## Custom Functions
 
-### Adding a Feature Function
-
-Add a decorated function in `src/bq_entity_resolution/features/registry.py`:
+Register your own feature and comparison functions without modifying the package:
 
 ```python
-@register("my_feature")
-def my_feature(inputs: list[str], **_: Any) -> str:
-    """My custom feature description."""
+from bq_entity_resolution import register_feature, register_comparison
+
+@register_feature("company_suffix_clean")
+def company_suffix_clean(inputs, **_):
+    """Strip common business suffixes (LLC, Inc, Corp)."""
     col = inputs[0]
-    return f"UPPER(TRIM({col}))"
+    return f"REGEXP_REPLACE(UPPER(TRIM({col})), r'\\b(LLC|INC|CORP|LTD)\\b', '')"
+
+@register_comparison("fuzzy_phone")
+def fuzzy_phone(left, right, last_n=7, **_):
+    """Match on last N digits of phone numbers."""
+    return f"(RIGHT(l.{left}, {last_n}) = RIGHT(r.{right}, {last_n}) AND l.{left} IS NOT NULL)"
 ```
 
-Use in YAML:
+Then use in YAML:
 ```yaml
-features:
-  - name: my_cleaned_col
-    function: my_feature
-    input: raw_col
-```
+feature_engineering:
+  features:
+    - name: company_clean
+      function: company_suffix_clean
+      input: company_name
 
-### Adding a Comparison Function
-
-Add a decorated function in `src/bq_entity_resolution/matching/comparisons.py`:
-
-```python
-@register("my_comparison")
-def my_comparison(left: str, right: str, threshold: float = 0.8, **_: Any) -> str:
-    """My custom comparison."""
-    return f"(my_func(l.{left}, r.{right}) >= {threshold} AND l.{left} IS NOT NULL)"
-```
-
-Use in YAML:
-```yaml
-comparisons:
-  - left: col_a
-    right: col_b
-    method: my_comparison
-    params: {threshold: 0.9}
-    weight: 2.0
-```
-
-### Adding a Matching Tier
-
-Pure YAML — no code changes:
-
-```yaml
 matching_tiers:
-  - name: my_new_tier
-    description: "Custom fuzzy matching"
-    blocking:
-      paths:
-        - keys: [bk_soundex_last]
-          candidate_limit: 500
+  - name: phone_match
     comparisons:
-      - {left: name_clean, right: name_clean, method: levenshtein, params: {max_distance: 2}, weight: 3.0}
-      - {left: phone_std, right: phone_std, method: exact, weight: 5.0}
-    threshold:
-      min_score: 5.0
-    hard_negatives:
-      - {left: entity_type, method: different, action: disqualify}
-    soft_signals:
-      - {left: email_domain, method: exact, bonus: 1.0}
+      - left: phone_clean
+        right: phone_clean
+        method: fuzzy_phone
+        params: { last_n: 7 }
+        weight: 3.0
 ```
 
 ## Built-in Functions
 
-### Feature Functions (60+)
+### Feature Functions (53)
 
 | Category | Functions |
 |----------|-----------|
@@ -375,7 +359,7 @@ matching_tiers:
 | Zip/Date | `zip5`, `zip3`, `year_of_date`, `date_to_string` |
 | Utility | `upper_trim`, `lower_trim`, `left`, `right`, `coalesce`, `concat`, `nullif_empty`, `identity` |
 
-### Comparison Functions (30+)
+### Comparison Functions (26)
 
 | Category | Functions |
 |----------|-----------|
@@ -388,6 +372,19 @@ matching_tiers:
 | String | `contains`, `starts_with` |
 | Token | `token_set_match`, `token_set_score`, `initials_match`, `abbreviation_match` |
 | Hard Negative | `different`, `null_either`, `length_mismatch` |
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `bq-er run` | Execute the full pipeline |
+| `bq-er validate` | Validate configuration |
+| `bq-er preview-sql` | Preview generated SQL for a tier |
+| `bq-er estimate-params` | Estimate Fellegi-Sunter m/u parameters |
+| `bq-er review-queue` | Generate active learning review queue |
+| `bq-er ingest-labels` | Ingest human labels and optionally retrain |
+| `bq-er profile` | Profile source columns for weight suggestions |
+| `bq-er analyze` | Analyze weight sensitivity |
 
 ## Environment Variables
 
@@ -402,8 +399,7 @@ project:
 ## Python API
 
 ```python
-from bq_entity_resolution.pipeline.pipeline import Pipeline
-from bq_entity_resolution.config.loader import load_config
+from bq_entity_resolution import Pipeline, load_config
 
 config = load_config("my_config.yml")
 
@@ -422,15 +418,24 @@ pipeline.run(backend=backend)
 
 # Execute locally with DuckDB (for testing)
 from bq_entity_resolution.backends.duckdb import DuckDBBackend
-backend = DuckDBBackend()
-pipeline.run(backend=backend)
+pipeline.run(backend=DuckDBBackend())
 ```
+
+## Example Configs
+
+| Config | Description |
+|--------|-------------|
+| [`minimal_dedup.yml`](config/examples/minimal_dedup.yml) | Simplest possible config (1 source, 1 tier, 2 comparisons) |
+| [`customer_dedup.yml`](config/examples/customer_dedup.yml) | 3-tier CRM customer deduplication |
+| [`person_linkage.yml`](config/examples/person_linkage.yml) | Cross-source record linkage with comparison pool |
+| [`probabilistic_matching.yml`](config/examples/probabilistic_matching.yml) | Fellegi-Sunter with EM training and active learning |
+| [`insurance_entity.yml`](config/examples/insurance_entity.yml) | 7-tier insurance entity resolution (production-grade) |
 
 ## Development
 
 ```bash
 pip install -e ".[dev,local]"
-python -m pytest tests/ -v               # 830+ tests, ~30s
+python -m pytest tests/ -v               # 929 tests, ~35s
 python -m ruff check src/                 # lint
 python -m mypy src/                       # type check
 ```
@@ -442,21 +447,30 @@ src/bq_entity_resolution/
   config/        Pydantic v2 schema, YAML loader, presets, role mapping, validators
   sql/builders/  14 Python SQL builder modules (type-safe, testable)
   sql/           SQLExpression wrapper (sqlglot-based), SQL utilities
-  features/      Feature function registry (60+ functions via @register)
-  matching/      Comparison registry (30+ functions), parameters, active learning
+  features/      Feature function registry (53 functions via @register)
+  matching/      Comparison registry (26 functions), parameters, active learning
   blocking/      Blocking key validation, LSH bucket logic
   reconciliation/  Clustering strategy descriptions, canonical output logic
   embeddings/    BigQuery ML embedding generation + LSH
   watermark/     Incremental watermark tracking + checkpoint/resume
-  stages/        8 Stage classes (composable DAG nodes with inputs/outputs)
+  stages/        10 Stage classes (composable DAG nodes with inputs/outputs)
   pipeline/      Pipeline, StageDAG, Plan, Executor, Validator, Quality Gates
   backends/      Pluggable backends (BigQuery, DuckDB, BQ Emulator)
   profiling/     Column profiling + weight sensitivity analysis
   monitoring/    Structured logging + metrics
   clients/       BigQuery client wrapper with retries
   naming.py      Centralized table naming (single source of truth)
+  columns.py     Centralized column name constants
   constants.py   Shared constants
   exceptions.py  Exception hierarchy
+```
+
+### Docker
+
+```bash
+docker build -t bq-er .
+docker run -v ./config:/app/config/user -v ./secrets:/app/secrets \
+  bq-er run --config /app/config/user/my_config.yml
 ```
 
 ## License

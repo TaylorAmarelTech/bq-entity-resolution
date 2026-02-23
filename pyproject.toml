@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bq-entity-resolution"
-version = "0.1.0"
+version = "0.2.0"
 description = "Configurable multi-tier entity resolution pipeline for BigQuery"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -40,6 +40,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1.0",
     "structlog>=24.0.0",
+    "sqlglot>=20.0.0",
 ]
 
 [project.optional-dependencies]
@@ -68,7 +69,6 @@ bq-er = "bq_entity_resolution.__main__:cli"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"bq_entity_resolution.sql" = ["templates/**/*.j2"]
 "bq_entity_resolution" = ["py.typed"]
 
 [tool.ruff]

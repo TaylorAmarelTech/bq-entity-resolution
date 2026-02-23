@@ -3,9 +3,10 @@
 Separates execution from planning. Handles:
 1. Running SQL in dependency order
 2. Quality gate checks after each stage
-3. Checkpoint/resume (skip_stages)
+3. Checkpoint/resume via CheckpointManager
 4. Metrics collection
 5. Error handling with diagnostics
+6. Progress callbacks
 """
 
 from __future__ import annotations
@@ -14,12 +15,38 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from bq_entity_resolution.backends.protocol import Backend, QueryResult
 from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
 
 logger = logging.getLogger(__name__)
+
+
+# BQ scripting markers — any of these indicate a script block
+_SCRIPT_MARKERS = frozenset({"DECLARE ", "BEGIN TRANSACTION", "BEGIN\n", "WHILE "})
+
+
+def _is_script_block(sql: str) -> bool:
+    """Detect whether SQL is a BigQuery scripting block.
+
+    Checks for common scripting patterns: DECLARE, WHILE,
+    BEGIN TRANSACTION, etc.
+    """
+    upper = sql.lstrip().upper()
+    return any(marker in upper for marker in _SCRIPT_MARKERS)
+
+
+class ProgressCallback(Protocol):
+    """Protocol for pipeline progress reporting."""
+
+    def __call__(
+        self,
+        stage_name: str,
+        stage_index: int,
+        total_stages: int,
+        status: str,
+    ) -> None: ...
 
 
 @dataclass
@@ -68,27 +95,42 @@ class PipelineResult:
         ]
 
 
+class CheckpointManagerProtocol(Protocol):
+    """Protocol for checkpoint persistence (avoids circular import)."""
+
+    def ensure_table_exists(self) -> None: ...
+    def load_completed_stages(self, run_id: str) -> set[str]: ...
+    def find_resumable_run(self) -> str | None: ...
+    def mark_stage_complete(self, run_id: str, stage_name: str) -> None: ...
+    def mark_run_complete(self, run_id: str) -> None: ...
+
+
 class PipelineExecutor:
     """Executes a PipelinePlan against a Backend.
 
     Handles the plan/execute split: all SQL is pre-generated,
     and the executor runs it in order with error handling,
-    quality gates, and metrics collection.
+    quality gates, checkpoint persistence, and metrics collection.
     """
 
     def __init__(
         self,
         backend: Backend,
         quality_gates: list[Any] | None = None,
+        checkpoint_manager: CheckpointManagerProtocol | None = None,
+        on_progress: ProgressCallback | None = None,
     ):
         self.backend = backend
         self.quality_gates = quality_gates or []
+        self._checkpoint = checkpoint_manager
+        self._on_progress = on_progress
 
     def execute(
         self,
         plan: PipelinePlan,
         run_id: str | None = None,
         skip_stages: set[str] | None = None,
+        resume: bool = False,
     ) -> PipelineResult:
         """Execute a pipeline plan.
 
@@ -96,15 +138,39 @@ class PipelineExecutor:
             plan: The immutable pipeline plan to execute.
             run_id: Optional run identifier. Auto-generated if not provided.
             skip_stages: Stage names to skip (for checkpoint/resume).
+            resume: If True and checkpoint_manager is set, auto-detect
+                resumable run and skip completed stages.
         """
-        skip_stages = skip_stages or set()
-        run_id = run_id or self._generate_run_id()
+        skip_stages = set(skip_stages) if skip_stages else set()
 
+        # Auto-resume from checkpoint if requested
+        if resume and self._checkpoint:
+            try:
+                self._checkpoint.ensure_table_exists()
+                resumable_run_id = self._checkpoint.find_resumable_run()
+                if resumable_run_id:
+                    completed = self._checkpoint.load_completed_stages(
+                        resumable_run_id
+                    )
+                    skip_stages |= completed
+                    run_id = resumable_run_id
+                    logger.info(
+                        "Resuming run '%s' — skipping %d completed stages: %s",
+                        run_id, len(completed), sorted(completed),
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to load checkpoint state; starting fresh",
+                    exc_info=True,
+                )
+
+        run_id = run_id or self._generate_run_id()
         result = PipelineResult(run_id=run_id)
-        logger.info("Pipeline execution started: %s", run_id)
+        total_stages = len(plan.stages)
+        logger.info("Pipeline execution started: %s (%d stages)", run_id, total_stages)
 
         try:
-            for stage_plan in plan.stages:
+            for idx, stage_plan in enumerate(plan.stages):
                 if stage_plan.stage_name in skip_stages:
                     result.stage_results.append(StageExecutionResult(
                         stage_name=stage_plan.stage_name,
@@ -114,21 +180,58 @@ class PipelineExecutor:
                         "Skipping stage '%s' (checkpoint resume)",
                         stage_plan.stage_name,
                     )
+                    self._notify_progress(
+                        stage_plan.stage_name, idx, total_stages, "skipped"
+                    )
                     continue
 
+                self._notify_progress(
+                    stage_plan.stage_name, idx, total_stages, "running"
+                )
                 stage_result = self._execute_stage(stage_plan, result)
                 result.stage_results.append(stage_result)
 
                 if not stage_result.success:
+                    self._notify_progress(
+                        stage_plan.stage_name, idx, total_stages, "failed"
+                    )
                     raise RuntimeError(
                         f"Stage '{stage_plan.stage_name}' failed: "
                         f"{stage_result.error}"
                     )
 
+                # Persist checkpoint after successful stage
+                if self._checkpoint:
+                    try:
+                        self._checkpoint.mark_stage_complete(
+                            run_id, stage_plan.stage_name
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist checkpoint for '%s'",
+                            stage_plan.stage_name,
+                            exc_info=True,
+                        )
+
                 # Run quality gates
                 self._check_gates(stage_plan, result)
 
+                self._notify_progress(
+                    stage_plan.stage_name, idx, total_stages, "completed"
+                )
+
             result.status = "success"
+
+            # Mark entire run as complete in checkpoint
+            if self._checkpoint:
+                try:
+                    self._checkpoint.mark_run_complete(run_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to mark run complete in checkpoint",
+                        exc_info=True,
+                    )
+
             logger.info(
                 "Pipeline completed: %s (%.1fs)",
                 run_id,
@@ -181,7 +284,7 @@ class PipelineExecutor:
                 })
 
                 # Use execute_script for BQ scripting blocks
-                if "DECLARE" in sql and "WHILE" in sql:
+                if _is_script_block(sql):
                     query_result = self.backend.execute_script(
                         sql, label=stage_plan.stage_name
                     )
@@ -230,6 +333,20 @@ class PipelineExecutor:
                             stage_plan.stage_name,
                             gate_result.message,
                         )
+
+    def _notify_progress(
+        self,
+        stage_name: str,
+        stage_index: int,
+        total_stages: int,
+        status: str,
+    ) -> None:
+        """Send progress notification if a callback is registered."""
+        if self._on_progress:
+            try:
+                self._on_progress(stage_name, stage_index, total_stages, status)
+            except Exception:
+                pass  # Never let progress callback crash the pipeline
 
     @staticmethod
     def _generate_run_id() -> str:

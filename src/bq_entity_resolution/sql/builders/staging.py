@@ -27,6 +27,19 @@ class JoinDef:
 
 
 @dataclass(frozen=True)
+class PartitionCursor:
+    """A partition-aware cursor for scan optimization.
+
+    When BigQuery tables are partitioned by columns beyond the
+    timestamp (e.g. state, region, policy_year), adding partition
+    cursors generates AND predicates that enable partition pruning.
+    """
+    column: str
+    value: Any
+    strategy: str = "range"  # "range", "equality", "in_list"
+
+
+@dataclass(frozen=True)
 class StagingParams:
     """Parameters for staging SQL generation."""
     target_table: str
@@ -44,6 +57,8 @@ class StagingParams:
     partition_column: str | None = None
     batch_size: int | None = None
     cluster_by: list[str] = field(default_factory=list)
+    partition_by: str | None = None  # e.g. "DATE(source_updated_at)"
+    partition_cursors: list[PartitionCursor] = field(default_factory=list)
 
 
 def _format_watermark_value(val: Any) -> str:
@@ -74,6 +89,8 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
 
     # CREATE OR REPLACE TABLE
     parts.append(f"CREATE OR REPLACE TABLE `{params.target_table}`")
+    if params.partition_by:
+        parts.append(f"PARTITION BY {params.partition_by}")
     if params.cluster_by:
         parts.append(f"CLUSTER BY {', '.join(params.cluster_by)}")
     parts.append("AS")
@@ -133,6 +150,18 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
         parts.append(f"AND (")
         parts.append(f"  {' OR '.join(conditions)}")
         parts.append(f")")
+
+    # Partition cursor filters (AND with time watermark for partition pruning)
+    if params.partition_cursors and not params.full_refresh:
+        for pc in params.partition_cursors:
+            formatted_val = _format_watermark_value(pc.value)
+            if pc.strategy == "range":
+                parts.append(f"AND {pc.column} >= {formatted_val}")
+            elif pc.strategy == "equality":
+                parts.append(f"AND {pc.column} = {formatted_val}")
+            elif pc.strategy == "in_list" and isinstance(pc.value, (list, tuple)):
+                vals = ", ".join(_format_watermark_value(v) for v in pc.value)
+                parts.append(f"AND {pc.column} IN ({vals})")
 
     # Exclude incomplete current day
     if params.partition_column:

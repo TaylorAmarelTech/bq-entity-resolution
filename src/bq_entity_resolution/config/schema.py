@@ -76,6 +76,82 @@ class SourceConfig(BaseModel):
             raise ValueError(f"Duplicate column names: {set(dupes)}")
         return v
 
+    @classmethod
+    def from_table(
+        cls,
+        table: str,
+        backend: Any = None,
+        unique_key: str = "id",
+        updated_at: str = "updated_at",
+        name: Optional[str] = None,
+        exclude_columns: Optional[set[str]] = None,
+        auto_roles: bool = True,
+    ) -> "SourceConfig":
+        """Create a SourceConfig by discovering columns from a live table.
+
+        Auto-detects column types from BigQuery INFORMATION_SCHEMA and
+        assigns semantic roles from column names. Reduces boilerplate when
+        setting up new sources.
+
+        Args:
+            table: Fully-qualified BigQuery table (project.dataset.table).
+            backend: A Backend instance (BigQuery or DuckDB) for schema
+                introspection. If None, columns must be provided manually.
+            unique_key: Primary key column name.
+            updated_at: Timestamp column for incremental processing.
+            name: Source name (derived from table if not set).
+            exclude_columns: Column names to skip (e.g. internal audit cols).
+            auto_roles: If True, auto-detect roles from column names.
+
+        Example:
+            from bq_entity_resolution.backends.bigquery import BigQueryBackend
+            backend = BigQueryBackend(project="my-project")
+            source = SourceConfig.from_table(
+                "my-project.raw.customers",
+                backend=backend,
+            )
+        """
+        from bq_entity_resolution.config.roles import detect_role
+
+        if not name:
+            name = table.rsplit(".", 1)[-1]
+
+        exclude = exclude_columns or set()
+
+        columns: list[ColumnMapping] = []
+        partition_col = None
+
+        if backend is not None:
+            schema = backend.get_table_schema(table)
+            for col_def in schema.columns:
+                if col_def.name in exclude:
+                    continue
+                role = detect_role(col_def.name) if auto_roles else None
+                columns.append(ColumnMapping(
+                    name=col_def.name,
+                    type=col_def.type,
+                    role=role,
+                    nullable=col_def.nullable,
+                ))
+                # Auto-detect partition column
+                if col_def.type in ("TIMESTAMP", "DATE", "DATETIME"):
+                    if col_def.name == updated_at:
+                        partition_col = col_def.name
+        else:
+            raise ValueError(
+                "backend is required for SourceConfig.from_table(). "
+                "Pass a BigQueryBackend or DuckDBBackend instance."
+            )
+
+        return cls(
+            name=name,
+            table=table,
+            unique_key=unique_key,
+            updated_at=updated_at,
+            partition_column=partition_col,
+            columns=columns,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Feature engineering
@@ -422,12 +498,42 @@ class ReconciliationConfig(BaseModel):
 # Incremental processing
 # ---------------------------------------------------------------------------
 
+class PartitionCursorConfig(BaseModel):
+    """A partition-aware cursor dimension for scan optimization.
+
+    When sources are partitioned by columns beyond the timestamp (e.g.
+    state, policy_id, region), adding them as partition cursors generates
+    AND predicates in the staging WHERE clause. BigQuery uses these for
+    partition pruning, dramatically reducing bytes scanned.
+
+    Example config::
+
+        incremental:
+          partition_cursors:
+            - column: state
+              strategy: range      # >= last processed value
+            - column: policy_year
+              strategy: equality   # = current year
+
+    This generates::
+
+        WHERE updated_at > WATERMARK_TS
+          AND state >= 'last_processed_state'
+          AND policy_year = 2024
+    """
+
+    column: str
+    strategy: Literal["range", "equality", "in_list"] = "range"
+    value: Optional[Any] = None  # Static value for equality strategy
+
+
 class IncrementalConfig(BaseModel):
     """Incremental processing and watermark configuration."""
 
     enabled: bool = True
     grace_period_hours: int = 48
     cursor_columns: list[str] = Field(default_factory=lambda: ["updated_at"])
+    partition_cursors: list[PartitionCursorConfig] = Field(default_factory=list)
     batch_size: int = 2_000_000
     full_refresh_on_schema_change: bool = True
 
@@ -491,23 +597,53 @@ class ScaleConfig(BaseModel):
     """Scale optimizations for high-volume processing (5-10M+ records/day).
 
     All fields are opt-in (off by default) to preserve backwards compatibility.
-    Clustering columns control BigQuery CLUSTER BY clauses on generated tables.
+
+    **Partitioning** controls BigQuery PARTITION BY on generated tables.
+    Good partition columns: date/timestamp columns with daily/monthly granularity.
+    BigQuery limit: max 1 partition column per table, 4000 partitions.
+
+    **Clustering** controls BigQuery CLUSTER BY on generated tables.
+    Up to 4 columns per table. Put highest-cardinality filter columns first.
+
+    Example config::
+
+        scale:
+          staging_partition_by: "DATE(source_updated_at)"
+          staging_clustering: [entity_uid, source_name]
+          candidates_clustering: [l_entity_uid]
+          matches_partition_by: "DATE(matched_at)"
     """
 
     max_bytes_billed: Optional[int] = None  # Safety cap per query (bytes)
+
+    # Staging tables
+    staging_partition_by: Optional[str] = None  # e.g. "DATE(source_updated_at)"
     staging_clustering: list[str] = Field(
         default_factory=lambda: ["entity_uid"]
     )
+
+    # Featured tables
+    featured_partition_by: Optional[str] = None
     featured_table_clustering: list[str] = Field(default_factory=list)
+
+    # Candidate pair tables
+    candidates_partition_by: Optional[str] = None
     candidates_clustering: list[str] = Field(
         default_factory=lambda: ["l_entity_uid"]
     )
+
+    # Match result tables
+    matches_partition_by: Optional[str] = None  # e.g. "DATE(matched_at)"
     matches_clustering: list[str] = Field(
         default_factory=lambda: ["l_entity_uid", "r_entity_uid"]
     )
+
+    # Canonical index
+    canonical_index_partition_by: Optional[str] = None
     canonical_index_clustering: list[str] = Field(
         default_factory=lambda: ["entity_uid"]
     )
+
     checkpoint_enabled: bool = False
 
 

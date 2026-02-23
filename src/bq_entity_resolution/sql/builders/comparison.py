@@ -144,6 +144,12 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
     Each comparison produces a 0/1 score, multiplied by weight.
     Total score = sum of weighted scores + soft signals - penalties.
     """
+    if not params.comparisons:
+        raise ValueError(
+            f"Tier '{params.tier_name}' has no comparisons defined. "
+            "At least one comparison is required for scoring."
+        )
+
     parts: list[str] = []
 
     parts.append(f"CREATE OR REPLACE TABLE `{params.matches_table}` AS")
@@ -257,6 +263,9 @@ def _build_fs_level_case(
     tf_table: str | None,
 ) -> str:
     """Build COALESCE(CASE ... END, 0.0) for a Fellegi-Sunter comparison."""
+    if not comp.levels:
+        return "0.0"
+
     lines: list[str] = ["COALESCE(CASE"]
 
     for level in comp.levels:
@@ -283,6 +292,12 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
     Total score = log_prior_odds + sum of per-comparison log-weights.
     Match probability = 2^score / (1 + 2^score) with overflow clamping.
     """
+    if not params.comparisons:
+        raise ValueError(
+            f"Tier '{params.tier_name}' has no comparisons defined. "
+            "At least one comparison is required for Fellegi-Sunter scoring."
+        )
+
     parts: list[str] = []
 
     parts.append(f"CREATE OR REPLACE TABLE `{params.matches_table}` AS")

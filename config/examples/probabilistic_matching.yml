@@ -14,14 +14,14 @@ version: "1.0"
 project:
   name: probabilistic_dedup
   description: "Probabilistic entity resolution with Fellegi-Sunter scoring"
-  bq_project: my-gcp-project
+  bq_project: "${BQ_PROJECT}"
   bq_dataset_bronze: er_bronze
   bq_dataset_silver: er_silver
   bq_dataset_gold: er_gold
 
 sources:
   - name: contacts
-    table: my-gcp-project.raw.contacts
+    table: "${BQ_PROJECT}.raw.contacts"
     unique_key: contact_id
     updated_at: updated_at
     columns:

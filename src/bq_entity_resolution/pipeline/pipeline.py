@@ -37,12 +37,17 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from bq_entity_resolution.backends.protocol import Backend
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.pipeline.dag import StageDAG, build_pipeline_dag
-from bq_entity_resolution.pipeline.executor import PipelineExecutor, PipelineResult
+from bq_entity_resolution.pipeline.executor import (
+    CheckpointManagerProtocol,
+    PipelineExecutor,
+    PipelineResult,
+    ProgressCallback,
+)
 from bq_entity_resolution.pipeline.gates import DataQualityGate, default_gates
 from bq_entity_resolution.pipeline.plan import PipelinePlan, create_plan
 from bq_entity_resolution.pipeline.validator import (
@@ -62,6 +67,8 @@ class Pipeline:
     2. Plan preview (see all SQL before executing)
     3. Backend-agnostic execution (BigQuery or DuckDB)
     4. Quality gates (runtime assertions after each stage)
+    5. Checkpoint/resume for crash recovery
+    6. Progress callbacks for UI integration
     """
 
     def __init__(
@@ -125,6 +132,9 @@ class Pipeline:
         backend: Backend,
         run_id: str | None = None,
         skip_stages: set[str] | None = None,
+        checkpoint_manager: CheckpointManagerProtocol | None = None,
+        resume: bool = False,
+        on_progress: ProgressCallback | None = None,
     ) -> PipelineResult:
         """Execute a pre-generated plan against a backend.
 
@@ -133,15 +143,21 @@ class Pipeline:
             backend: Execution backend (BigQuery or DuckDB).
             run_id: Optional run identifier.
             skip_stages: Stage names to skip (checkpoint/resume).
+            checkpoint_manager: Optional checkpoint manager for crash recovery.
+            resume: If True, auto-detect resumable run from checkpoint.
+            on_progress: Optional callback for progress reporting.
         """
         executor = PipelineExecutor(
             backend=backend,
             quality_gates=self._gates,
+            checkpoint_manager=checkpoint_manager,
+            on_progress=on_progress,
         )
         return executor.execute(
             plan,
             run_id=run_id,
             skip_stages=skip_stages,
+            resume=resume,
         )
 
     def run(
@@ -150,6 +166,9 @@ class Pipeline:
         full_refresh: bool = False,
         run_id: str | None = None,
         skip_stages: set[str] | None = None,
+        checkpoint_manager: CheckpointManagerProtocol | None = None,
+        resume: bool = False,
+        on_progress: ProgressCallback | None = None,
         **plan_kwargs: Any,
     ) -> PipelineResult:
         """Convenience: validate, plan, and execute in one call.
@@ -159,6 +178,9 @@ class Pipeline:
             full_refresh: Ignore watermarks.
             run_id: Optional run identifier.
             skip_stages: Stages to skip.
+            checkpoint_manager: Optional checkpoint persistence.
+            resume: Auto-resume from last incomplete run.
+            on_progress: Optional progress callback.
             **plan_kwargs: Additional kwargs for plan generation.
         """
         # Validate first
@@ -194,7 +216,82 @@ class Pipeline:
             backend=backend,
             run_id=run_id,
             skip_stages=skip_stages,
+            checkpoint_manager=checkpoint_manager,
+            resume=resume,
+            on_progress=on_progress,
         )
+
+    @classmethod
+    def from_table(
+        cls,
+        table: str,
+        backend: Backend,
+        bq_project: str | None = None,
+        unique_key: str = "id",
+        updated_at: str = "updated_at",
+        column_roles: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> "Pipeline":
+        """Create a Pipeline directly from a BigQuery table reference.
+
+        The ultimate minimal setup: auto-discovers columns, detects roles,
+        generates features, blocking keys, comparisons, and tiers.
+
+        Args:
+            table: Fully-qualified BigQuery table (project.dataset.table).
+            backend: Backend for schema introspection.
+            bq_project: GCP project (auto-detected from table if not set).
+            unique_key: Primary key column.
+            updated_at: Timestamp column.
+            column_roles: Explicit role overrides {column_name: role}.
+            **kwargs: Additional Pipeline constructor kwargs.
+
+        Example:
+            from bq_entity_resolution import Pipeline
+            from bq_entity_resolution.backends.bigquery import BigQueryBackend
+
+            backend = BigQueryBackend(project="my-project")
+            pipeline = Pipeline.from_table(
+                "my-project.raw.customers",
+                backend=backend,
+            )
+            result = pipeline.run(backend=backend)
+        """
+        from bq_entity_resolution.config.presets import quick_config
+        from bq_entity_resolution.config.roles import detect_role
+        from bq_entity_resolution.config.schema import SourceConfig
+
+        # Discover columns from live table
+        source = SourceConfig.from_table(
+            table=table,
+            backend=backend,
+            unique_key=unique_key,
+            updated_at=updated_at,
+        )
+
+        # Build role map from discovered columns
+        role_map: dict[str, str] = {}
+        if column_roles:
+            role_map.update(column_roles)
+        for col in source.columns:
+            if col.name not in role_map and col.role:
+                role_map[col.name] = col.role
+
+        # Derive project from table
+        if not bq_project:
+            parts = table.split(".")
+            bq_project = parts[0] if len(parts) >= 3 else "default-project"
+
+        config = quick_config(
+            bq_project=bq_project,
+            source_table=table,
+            unique_key=unique_key,
+            updated_at=updated_at,
+            column_roles=role_map if role_map else None,
+            columns=[c.name for c in source.columns] if not role_map else None,
+        )
+
+        return cls(config, **kwargs)
 
     def _external_tables(self) -> set[str]:
         """Collect external table names from config sources.

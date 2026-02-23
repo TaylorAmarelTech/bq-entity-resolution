@@ -52,6 +52,7 @@ class BlockingParams:
     lsh_table: str | None = None
     link_type: str | None = None  # 'link_and_dedupe', 'dedupe_only', 'link_only'
     cluster_by: list[str] = field(default_factory=list)
+    partition_by: str | None = None
 
 
 def _build_join_conditions(
@@ -144,6 +145,8 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
     parts: list[str] = []
 
     parts.append(f"CREATE OR REPLACE TABLE `{params.target_table}`")
+    if params.partition_by:
+        parts.append(f"PARTITION BY {params.partition_by}")
     if params.cluster_by:
         parts.append(f"CLUSTER BY {', '.join(params.cluster_by)}")
     parts.append("AS")

@@ -79,6 +79,12 @@ def build_update_watermark_sql(
         run_id: Pipeline run identifier.
         now: ISO timestamp string.
     """
+    if not cursors:
+        raise ValueError(
+            f"No watermark cursors provided for source '{source_name}'. "
+            "At least one cursor is required to advance the watermark."
+        )
+
     escaped_source = sql_escape(source_name)
     escaped_run_id = sql_escape(run_id)
     escaped_now = sql_escape(now)

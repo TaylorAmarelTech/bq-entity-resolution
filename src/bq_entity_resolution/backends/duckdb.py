@@ -528,12 +528,12 @@ class DuckDBBackend:
         sql = sql.replace("`", "")
         # CURRENT_TIMESTAMP() → current_timestamp (DuckDB form)
         sql = re.sub(r'CURRENT_TIMESTAMP\(\)', 'current_timestamp', sql)
-        # ARRAY_AGG(col ORDER BY ... LIMIT n)[OFFSET(0)] → DuckDB equivalent
-        # BQ: ARRAY_AGG(expr ORDER BY ... LIMIT 1)[OFFSET(0)]
-        # DuckDB: (SELECT expr ORDER BY ... LIMIT 1) via FIRST/MIN or subquery
+        # ARRAY_AGG(col ORDER BY ... LIMIT 1)[OFFSET(0)] → DuckDB FIRST()
+        # BQ idiom for "first value when ordered by X"
+        # DuckDB: FIRST(col ORDER BY expr)
         sql = re.sub(
             r'ARRAY_AGG\((\w+)\s+ORDER\s+BY\s+([^)]+?)\s+LIMIT\s+1\)\[OFFSET\(0\)\]',
-            r'(SELECT \1 FROM canonical_scores cs2 WHERE cs2.cluster_id = canonical_scores.cluster_id ORDER BY \2 LIMIT 1)',
+            r'FIRST(\1 ORDER BY \2)',
             sql,
         )
         # APPROX_QUANTILES(col, n)[OFFSET(m)] → PERCENTILE_CONT approximation

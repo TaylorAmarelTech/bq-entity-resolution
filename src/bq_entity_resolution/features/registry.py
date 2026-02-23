@@ -576,13 +576,6 @@ def dob_mmdd(inputs: list[str], **_: Any) -> str:
     return f"FORMAT_DATE('%m%d', {col})"
 
 
-@register("phone_area_code")
-def phone_area_code(inputs: list[str], **_: Any) -> str:
-    """Extract the 3-digit area code from a phone number."""
-    col = inputs[0]
-    return f"LEFT(REGEXP_REPLACE({col}, r'[^0-9]', ''), 3)"
-
-
 # ---------------------------------------------------------------------------
 # Geo-spatial features
 # ---------------------------------------------------------------------------
