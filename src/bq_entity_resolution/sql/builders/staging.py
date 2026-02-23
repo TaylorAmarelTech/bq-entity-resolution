@@ -5,6 +5,25 @@ Generates SQL to load source data into bronze staging area with:
 - Watermark-based incremental filtering with grace period
 - Source-level filters and supplemental joins
 - Batch size limits
+
+Entity UID Design — INT64 via FARM_FINGERPRINT
+================================================
+The entity_uid is the universal join key throughout the entire pipeline:
+  staging → features → blocking → matching → clustering → gold output
+
+It is generated as:
+  FARM_FINGERPRINT(CONCAT(source_name, '||', CAST(unique_key AS STRING)))
+
+This produces a deterministic INT64 that:
+  1. Is unique per source record (source_name scopes the unique_key)
+  2. Is stable across runs (same input → same INT64, always)
+  3. Enables INT64 equi-joins everywhere downstream (~3-5x faster than STRING)
+  4. Takes 8 bytes of storage vs variable-length STRING concatenation
+  5. Works naturally with CLUSTER BY for storage co-location
+
+All downstream JOINs (blocking → candidates, candidates → matches,
+matches → clusters) use entity_uid INT64 comparisons. This is the
+single most impactful performance decision in the pipeline architecture.
 """
 
 from __future__ import annotations
@@ -97,7 +116,13 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
     parts.append("")
     parts.append("SELECT")
 
-    # Entity UID
+    # Entity UID — INT64 via FARM_FINGERPRINT.
+    # PERF: This is the foundation of pipeline performance. By generating
+    # entity_uid as INT64 here, ALL downstream JOINs (blocking, matching,
+    # clustering) use 8-byte integer comparisons instead of variable-length
+    # STRING concatenation comparisons. The CONCAT includes source_name to
+    # ensure uniqueness across sources (same unique_key in different sources
+    # produces different entity_uids).
     escaped_name = sql_escape(params.source_name)
     parts.append(f"  FARM_FINGERPRINT(")
     parts.append(f"    CONCAT(")

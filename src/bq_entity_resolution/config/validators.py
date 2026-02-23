@@ -7,8 +7,18 @@ Pydantic's per-model validation cannot catch.
 
 from __future__ import annotations
 
+import difflib
+
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.exceptions import ConfigurationError
+
+
+def _suggest_closest(name: str, valid: set[str], n: int = 3) -> str:
+    """Suggest closest matches for a typo."""
+    matches = difflib.get_close_matches(name, sorted(valid), n=n, cutoff=0.6)
+    if matches:
+        return f" Did you mean: {', '.join(repr(m) for m in matches)}?"
+    return ""
 
 
 def validate_comparison_columns_exist(config: PipelineConfig) -> None:
@@ -255,49 +265,49 @@ def validate_comparison_methods_registered(config: PipelineConfig) -> None:
             if feat.sql:
                 continue  # raw SQL override — no function to validate
             if feat.function not in known_feature:
+                suggestion = _suggest_closest(feat.function, known_feature)
                 errors.append(
                     f"Feature '{feat.name}' references unknown function "
-                    f"'{feat.function}'. Registered functions: "
-                    f"{sorted(known_feature)}"
+                    f"'{feat.function}'.{suggestion}"
                 )
 
     for feat in config.feature_engineering.custom_features:
         if feat.sql:
             continue
         if feat.function not in known_feature:
+            suggestion = _suggest_closest(feat.function, known_feature)
             errors.append(
                 f"Custom feature '{feat.name}' references unknown function "
-                f"'{feat.function}'. Registered functions: "
-                f"{sorted(known_feature)}"
+                f"'{feat.function}'.{suggestion}"
             )
 
     # Blocking key function names
     for bk in config.feature_engineering.blocking_keys:
         if bk.function not in known_feature:
+            suggestion = _suggest_closest(bk.function, known_feature)
             errors.append(
                 f"Blocking key '{bk.name}' references unknown function "
-                f"'{bk.function}'. Registered functions: "
-                f"{sorted(known_feature)}"
+                f"'{bk.function}'.{suggestion}"
             )
 
     # Comparison method names
     for tier in config.enabled_tiers():
         for comp in tier.comparisons:
             if comp.method not in known_comparison:
+                suggestion = _suggest_closest(comp.method, known_comparison)
                 errors.append(
                     f"Tier '{tier.name}' comparison '{comp.left}/{comp.right}' "
-                    f"references unknown method '{comp.method}'. "
-                    f"Registered methods: {sorted(known_comparison)}"
+                    f"references unknown method '{comp.method}'.{suggestion}"
                 )
             # Multi-level comparisons
             if comp.levels:
                 for lvl in comp.levels:
                     if lvl.method and lvl.method not in known_comparison:
+                        suggestion = _suggest_closest(lvl.method, known_comparison)
                         errors.append(
                             f"Tier '{tier.name}' comparison '{comp.left}/{comp.right}' "
                             f"level '{lvl.label}' references unknown method "
-                            f"'{lvl.method}'. "
-                            f"Registered methods: {sorted(known_comparison)}"
+                            f"'{lvl.method}'.{suggestion}"
                         )
 
         # Hard negative methods
@@ -305,10 +315,10 @@ def validate_comparison_methods_registered(config: PipelineConfig) -> None:
             if hn.sql:
                 continue  # raw SQL override
             if hn.method not in known_comparison:
+                suggestion = _suggest_closest(hn.method, known_comparison)
                 errors.append(
                     f"Tier '{tier.name}' hard_negative references unknown method "
-                    f"'{hn.method}'. "
-                    f"Registered methods: {sorted(known_comparison)}"
+                    f"'{hn.method}'.{suggestion}"
                 )
 
         # Soft signal methods
@@ -316,10 +326,10 @@ def validate_comparison_methods_registered(config: PipelineConfig) -> None:
             if ss.sql:
                 continue  # raw SQL override
             if ss.method not in known_comparison:
+                suggestion = _suggest_closest(ss.method, known_comparison)
                 errors.append(
                     f"Tier '{tier.name}' soft_signal references unknown method "
-                    f"'{ss.method}'. "
-                    f"Registered methods: {sorted(known_comparison)}"
+                    f"'{ss.method}'.{suggestion}"
                 )
 
     if errors:

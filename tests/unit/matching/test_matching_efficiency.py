@@ -28,8 +28,10 @@ def test_staging_builder_no_string_cast():
     assert "AS entity_uid" in sql
 
 
-def test_blocking_builder_null_cast_int64():
-    """Blocking builder uses CAST(NULL AS INT64) for entity_uid."""
+def test_blocking_builder_raises_on_empty_paths():
+    """Blocking builder raises ValueError when no blocking paths are defined."""
+    import pytest
+
     from bq_entity_resolution.sql.builders.blocking import (
         BlockingParams,
         build_blocking_sql,
@@ -41,9 +43,8 @@ def test_blocking_builder_null_cast_int64():
         blocking_paths=[],
         tier_name="tier1",
     )
-    sql = build_blocking_sql(params).render()
-    assert "CAST(NULL AS INT64) AS left_entity_uid" in sql
-    assert "CAST(NULL AS INT64) AS right_entity_uid" in sql
+    with pytest.raises(ValueError, match="No blocking paths defined for tier 'tier1'"):
+        build_blocking_sql(params)
 
 
 # ---------------------------------------------------------------------------

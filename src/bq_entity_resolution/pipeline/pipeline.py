@@ -294,15 +294,5 @@ class Pipeline:
         return cls(config, **kwargs)
 
     def _external_tables(self) -> set[str]:
-        """Collect external table names from config sources.
-
-        Also includes pipeline-managed tables that are initialized
-        and accumulated during execution but not produced by a
-        single stage (e.g., the all_matches_table).
-        """
-        from bq_entity_resolution.naming import all_matches_table
-
-        tables = {source.table for source in self._config.sources}
-        # all_matches_table is accumulated across tiers, not by one stage
-        tables.add(all_matches_table(self._config))
-        return tables
+        """Collect external table names from config sources."""
+        return {source.table for source in self._config.sources}

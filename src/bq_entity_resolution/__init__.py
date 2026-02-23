@@ -42,6 +42,24 @@ from bq_entity_resolution.matching.comparisons import (
     register as register_comparison,
 )
 
+# Backends (for local testing and production)
+from bq_entity_resolution.backends.duckdb import DuckDBBackend
+
+# Lazy import for BigQueryBackend (requires google-cloud-bigquery)
+def __getattr__(name: str):
+    if name == "BigQueryBackend":
+        from bq_entity_resolution.backends.bigquery import BigQueryBackend
+        return BigQueryBackend
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+# Role detection utilities
+from bq_entity_resolution.config.roles import (
+    detect_role,
+    features_for_role,
+    blocking_keys_for_role,
+    comparisons_for_role,
+)
+
 __all__ = [
     "__version__",
     # Core
@@ -62,4 +80,12 @@ __all__ = [
     "COMPARISON_FUNCTIONS",
     "register_feature",
     "register_comparison",
+    # Backends
+    "DuckDBBackend",
+    "BigQueryBackend",
+    # Role utilities
+    "detect_role",
+    "features_for_role",
+    "blocking_keys_for_role",
+    "comparisons_for_role",
 ]

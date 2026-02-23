@@ -7,6 +7,32 @@ Generates SQL to create candidate pairs from multiple blocking paths:
 - Deduplication across paths
 - Prior-tier exclusion
 - LSH bucket keys from embeddings
+
+BigQuery Blocking Performance Notes
+=====================================
+Blocking is the single most performance-critical stage. It determines the
+number of candidate pairs that flow into the (expensive) comparison stage.
+The JOIN conditions in blocking run on EVERY record, so column types matter:
+
+    INT64 blocking keys (fp_ columns):
+      - BQ uses hash-join with 8-byte keys → O(1) per probe
+      - CLUSTER BY on INT64 enables storage-level co-location
+      - Ideal for: FARM_FINGERPRINT(col), dob_year, entity_uid
+
+    STRING blocking keys (bk_ columns):
+      - BQ uses sort-merge or hash-join but hashes variable-length strings
+      - Extra cost from byte-by-byte hashing + comparison
+      - Acceptable for: soundex (4 chars), zip3 (3 chars), state (2 chars)
+      - Avoid for: full address, company names, long identifiers
+
+    Composite blocking (multiple keys per path):
+      - Multiple AND conditions: l.key1 = r.key1 AND l.key2 = r.key2
+      - BQ may hash only the first key, then filter the rest
+      - Alternative: FARM_FINGERPRINT(CONCAT(key1, '||', key2)) produces
+        a single INT64 that captures both keys in one comparison
+
+The entity_uid column is INT64 (FARM_FINGERPRINT-based) throughout the
+pipeline, ensuring all candidate pair JOINs are INT64-native.
 """
 
 from __future__ import annotations
@@ -75,12 +101,17 @@ def _build_join_conditions(
     elif link_type == "link_only":
         conditions.append("l.source_name != r.source_name")
 
-    # Blocking keys
+    # Blocking keys — equi-join conditions.
+    # PERF: Each key produces an equality condition in the JOIN ON clause.
+    # INT64 keys (fp_ columns) are ~3-5x faster here than STRING keys.
+    # IS NOT NULL filter prevents NULL=NULL matches (which BQ would skip
+    # anyway, but explicit filter helps the query optimizer).
     for key in path.keys:
         conditions.append(f"l.{key} = r.{key}")
         conditions.append(f"l.{key} IS NOT NULL")
 
-    # LSH keys
+    # LSH bucket keys — INT64 from FARM_FINGERPRINT of bucket hashes.
+    # These enable approximate nearest-neighbor blocking for embeddings.
     for key in path.lsh_keys:
         conditions.append(f"l.{key} = r.{key}")
         conditions.append(f"l.{key} IS NOT NULL")
@@ -216,18 +247,19 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
             )
 
     if not union_parts:
-        # Safety: no paths
-        parts.append(
-            f"  SELECT CAST(NULL AS INT64) AS {LEFT_ENTITY_UID}, "
-            f"CAST(NULL AS INT64) AS {RIGHT_ENTITY_UID}, "
-            f"CAST(NULL AS STRING) AS {BLOCKING_PATH} WHERE FALSE"
+        raise ValueError(
+            f"No blocking paths defined for tier '{params.tier_name}'. "
+            f"Each tier must have at least one blocking path."
         )
     else:
         parts.append("\n  UNION ALL\n".join(union_parts))
 
     parts.append("),")
 
-    # Deduplicate
+    # Deduplicate — removes duplicate pairs across blocking paths.
+    # PERF: DISTINCT on two INT64 columns (left_entity_uid, right_entity_uid)
+    # is very efficient — BQ hashes 16 bytes per row. This is much faster
+    # than deduplicating on STRING pairs would be.
     parts.append("deduplicated AS (")
     parts.append("  SELECT DISTINCT")
     parts.append(f"    {LEFT_ENTITY_UID},")
@@ -287,7 +319,7 @@ def build_blocking_metrics_sql(params: BlockingMetricsParams) -> SQLExpression:
         f"  SAFE_DIVIDE(\n"
         f"    (SELECT COUNT(*) FROM `{params.candidates_table}`),\n"
         f"    (SELECT COUNT(*) FROM `{params.source_table}`) "
-        f"* ((SELECT COUNT(*) FROM `{params.source_table}`) - 1) / 2\n"
+        f"* ((SELECT COUNT(*) FROM `{params.source_table}`) - 1) / 2.0\n"
         f"  ) AS {BLOCKING_METRIC_REDUCTION_RATIO},\n"
         f"  CURRENT_TIMESTAMP() AS {BLOCKING_METRIC_COMPUTED_AT}"
     )

@@ -20,6 +20,7 @@ from bq_entity_resolution.stages.features import (
     TermFrequencyStage,
 )
 from bq_entity_resolution.stages.blocking import BlockingStage
+from bq_entity_resolution.stages.match_accumulation import MatchAccumulationStage
 from bq_entity_resolution.stages.matching import MatchingStage
 from bq_entity_resolution.stages.reconciliation import (
     ClusteringStage,
@@ -182,19 +183,21 @@ def build_pipeline_dag(config: PipelineConfig) -> StageDAG:
     # 3. Term frequencies (auto-depends on features via TableRef)
     stages.append(TermFrequencyStage(config))
 
-    # 4. Blocking + matching per tier with explicit tier ordering
+    # 4. Blocking + matching + accumulation per tier with explicit tier ordering
     prev_matching_name: str | None = None
     for i, tier in enumerate(config.enabled_tiers()):
         blocking = BlockingStage(tier, i, config)
         matching = MatchingStage(tier, i, config)
+        accumulation = MatchAccumulationStage(tier, i, config)
         stages.append(blocking)
         stages.append(matching)
+        stages.append(accumulation)
 
-        # Cross-tier exclusion: tier i's blocking depends on tier i-1's matching
+        # Cross-tier exclusion: tier i's blocking depends on tier i-1's accumulation
         if prev_matching_name:
             explicit_edges[blocking.name] = [prev_matching_name]
 
-        prev_matching_name = matching.name
+        prev_matching_name = accumulation.name
 
         # Active learning per tier (if enabled)
         if getattr(tier.active_learning, "enabled", False):

@@ -9,6 +9,7 @@ from bq_entity_resolution.config.presets import (
     business_dedup_preset,
 )
 from bq_entity_resolution.config.schema import PipelineConfig
+from bq_entity_resolution.exceptions import ConfigurationError
 
 
 class TestQuickConfig:
@@ -72,7 +73,7 @@ class TestQuickConfig:
 
     def test_no_recognized_columns_raises(self):
         """Columns with no recognized roles raise an error."""
-        with pytest.raises(ValueError, match="No columns"):
+        with pytest.raises(ConfigurationError, match="No columns"):
             quick_config(
                 bq_project="test-proj",
                 source_table="test-proj.raw.data",
@@ -114,7 +115,7 @@ class TestPersonDedupPreset:
         assert config.link_type == "dedupe_only"
 
     def test_requires_columns(self):
-        with pytest.raises(ValueError, match="columns dict required"):
+        with pytest.raises(ConfigurationError, match="columns dict required"):
             person_dedup_preset(
                 bq_project="test-proj",
                 source_table="test-proj.raw.people",
@@ -159,7 +160,7 @@ class TestPersonLinkagePreset:
         assert len(config.sources) == 2
 
     def test_requires_two_sources(self):
-        with pytest.raises(ValueError, match="At least 2"):
+        with pytest.raises(ConfigurationError, match="At least 2"):
             person_linkage_preset(
                 bq_project="test-proj",
                 source_tables=[
@@ -196,7 +197,7 @@ class TestBusinessDedupPreset:
         assert config.link_type == "dedupe_only"
 
     def test_requires_columns(self):
-        with pytest.raises(ValueError, match="columns dict required"):
+        with pytest.raises(ConfigurationError, match="columns dict required"):
             business_dedup_preset(
                 bq_project="test-proj",
                 source_table="test-proj.raw.companies",

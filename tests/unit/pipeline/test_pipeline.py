@@ -243,5 +243,5 @@ class TestPipeline:
         pipeline = Pipeline(config, quality_gates=[])
         externals = pipeline._external_tables()
         assert "test-proj.raw.customers" in externals
-        # all_matches_table is also considered external (accumulated across tiers)
-        assert "test-proj.silver.all_matched_pairs" in externals
+        # all_matches_table is now produced by the accumulation stage, not external
+        assert "test-proj.silver.all_matched_pairs" not in externals

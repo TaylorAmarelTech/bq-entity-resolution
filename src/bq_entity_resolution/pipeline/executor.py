@@ -111,6 +111,14 @@ class PipelineExecutor:
     Handles the plan/execute split: all SQL is pre-generated,
     and the executor runs it in order with error handling,
     quality gates, checkpoint persistence, and metrics collection.
+
+    Retry strategy: The executor does NOT implement its own retry logic
+    for transient errors (503 ServiceUnavailable, 429 TooManyRequests,
+    500 InternalServerError). Retries are the responsibility of the
+    backend implementation. The BigQueryClient in clients/bigquery.py
+    provides exponential-backoff retries (3 attempts, 5s/10s/20s delay)
+    for these transient errors. DuckDB operations are local and do not
+    need network retries.
     """
 
     def __init__(
@@ -200,21 +208,25 @@ class PipelineExecutor:
                         f"{stage_result.error}"
                     )
 
-                # Persist checkpoint after successful stage
+                # Run quality gates BEFORE checkpoint (so failed gates
+                # are not persisted as completed on resume)
+                self._check_gates(stage_plan, result)
+
+                # Persist checkpoint after successful stage + gates
                 if self._checkpoint:
                     try:
                         self._checkpoint.mark_stage_complete(
                             run_id, stage_plan.stage_name
                         )
                     except Exception:
-                        logger.warning(
-                            "Failed to persist checkpoint for '%s'",
+                        logger.error(
+                            "Failed to persist checkpoint for stage '%s' in run '%s'. "
+                            "Stage completed successfully but checkpoint was NOT saved — "
+                            "this stage may re-execute on resume.",
                             stage_plan.stage_name,
+                            run_id,
                             exc_info=True,
                         )
-
-                # Run quality gates
-                self._check_gates(stage_plan, result)
 
                 self._notify_progress(
                     stage_plan.stage_name, idx, total_stages, "completed"
@@ -227,8 +239,10 @@ class PipelineExecutor:
                 try:
                     self._checkpoint.mark_run_complete(run_id)
                 except Exception:
-                    logger.warning(
-                        "Failed to mark run complete in checkpoint",
+                    logger.error(
+                        "Failed to mark run '%s' as complete in checkpoint. "
+                        "Pipeline finished successfully but may appear incomplete on resume.",
+                        run_id,
                         exc_info=True,
                     )
 

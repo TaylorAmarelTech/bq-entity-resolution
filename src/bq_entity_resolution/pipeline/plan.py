@@ -107,10 +107,39 @@ def create_plan(dag: StageDAG, **plan_kwargs: Any) -> PipelinePlan:
     Common kwargs:
       - watermark: dict[str, Any] | None
       - full_refresh: bool
+
+    Blocking stages for tiers after the first automatically receive
+    the all_matches_table as excluded_pairs_table for cross-tier
+    pair exclusion.
     """
     stage_plans = []
+
+    # Detect which blocking stages need excluded_pairs_table.
+    # A blocking stage needs exclusion if it depends (directly or
+    # transitively) on an accumulation stage.
+    accumulation_seen = False
+
     for stage in dag.stages:
-        exprs = stage.plan(**plan_kwargs)
+        stage_kwargs = dict(plan_kwargs)
+
+        # Inject excluded_pairs_table for blocking stages after the first tier.
+        # Convention: accumulation stages are named "accumulate_{tier}".
+        if stage.name.startswith("accumulate_"):
+            accumulation_seen = True
+        elif stage.name.startswith("blocking_") and accumulation_seen:
+            # This blocking stage is for a tier after the first --
+            # inject the all_matches_table for prior-tier exclusion.
+            if "excluded_pairs_table" not in stage_kwargs:
+                from bq_entity_resolution.stages.blocking import BlockingStage
+
+                if isinstance(stage, BlockingStage):
+                    from bq_entity_resolution.naming import all_matches_table
+
+                    stage_kwargs["excluded_pairs_table"] = all_matches_table(
+                        stage._config
+                    )
+
+        exprs = stage.plan(**stage_kwargs)
 
         stage_plans.append(StagePlan(
             stage_name=stage.name,

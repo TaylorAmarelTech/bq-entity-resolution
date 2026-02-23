@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bq_entity_resolution.columns import (
+    LEFT_ENTITY_UID,
+    RIGHT_ENTITY_UID,
+    ENTITY_UID,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -76,8 +81,8 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     # Step 1: Create sampled pairs with comparison outcomes
     lines.append("CREATE TEMP TABLE _em_pairs AS")
     lines.append("SELECT")
-    lines.append("  c.l_entity_uid,")
-    lines.append("  c.r_entity_uid,")
+    lines.append(f"  c.{LEFT_ENTITY_UID},")
+    lines.append(f"  c.{RIGHT_ENTITY_UID},")
 
     for comp in params.comparisons:
         for level in comp.levels:
@@ -89,18 +94,18 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
 
     lines.append("  0.5 AS match_weight")
     lines.append("FROM (")
-    lines.append("  SELECT l_entity_uid, r_entity_uid")
+    lines.append(f"  SELECT {LEFT_ENTITY_UID}, {RIGHT_ENTITY_UID}")
     lines.append(f"  FROM `{params.candidates_table}`")
     lines.append(
-        "  ORDER BY FARM_FINGERPRINT(CONCAT(l_entity_uid, '||', r_entity_uid))"
+        f"  ORDER BY FARM_FINGERPRINT(CONCAT({LEFT_ENTITY_UID}, '||', {RIGHT_ENTITY_UID}))"
     )
     lines.append(f"  LIMIT {params.sample_size}")
     lines.append(") c")
     lines.append(
-        f"INNER JOIN `{params.source_table}` l ON c.l_entity_uid = l.entity_uid"
+        f"INNER JOIN `{params.source_table}` l ON c.{LEFT_ENTITY_UID} = l.{ENTITY_UID}"
     )
     lines.append(
-        f"INNER JOIN `{params.source_table}` r ON c.r_entity_uid = r.entity_uid;"
+        f"INNER JOIN `{params.source_table}` r ON c.{RIGHT_ENTITY_UID} = r.{ENTITY_UID};"
     )
     lines.append("")
 
@@ -131,8 +136,8 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     # E-step: compute match probability for each pair using log-space
     lines.append("  CREATE OR REPLACE TEMP TABLE _em_scored AS")
     lines.append("  SELECT")
-    lines.append("    p.l_entity_uid,")
-    lines.append("    p.r_entity_uid,")
+    lines.append(f"    p.{LEFT_ENTITY_UID},")
+    lines.append(f"    p.{RIGHT_ENTITY_UID},")
 
     for comp_name, level_label in all_levels:
         col = f"{comp_name}__{level_label}"
@@ -193,8 +198,8 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     # Compute posterior match probability
     lines.append("  CREATE OR REPLACE TEMP TABLE _em_pairs_new AS")
     lines.append("  SELECT")
-    lines.append("    l_entity_uid,")
-    lines.append("    r_entity_uid,")
+    lines.append(f"    {LEFT_ENTITY_UID},")
+    lines.append(f"    {RIGHT_ENTITY_UID},")
     for comp_name, level_label in all_levels:
         lines.append(f"    {comp_name}__{level_label},")
     lines.append("    SAFE_DIVIDE(")
@@ -345,9 +350,9 @@ def build_estimate_from_labels_sql(
                 "  SAFE_DIVIDE(COUNTIF(lp.is_match), COUNT(*)) AS match_rate",
                 f"FROM `{params.labeled_pairs_table}` lp",
                 f"INNER JOIN `{params.source_table}` l "
-                "ON lp.l_entity_uid = l.entity_uid",
+                f"ON lp.{LEFT_ENTITY_UID} = l.{ENTITY_UID}",
                 f"INNER JOIN `{params.source_table}` r "
-                "ON lp.r_entity_uid = r.entity_uid",
+                f"ON lp.{RIGHT_ENTITY_UID} = r.{ENTITY_UID}",
             ]
             parts.append("\n".join(part_lines))
 

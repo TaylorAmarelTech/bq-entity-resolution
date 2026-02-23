@@ -13,6 +13,7 @@ from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.features.registry import FEATURE_FUNCTIONS
 from bq_entity_resolution.naming import featured_table, staged_table
 from bq_entity_resolution.sql.builders.features import (
+    EnrichmentJoin,
     FeatureExpr,
     FeatureParams,
     TFColumn,
@@ -158,6 +159,35 @@ class FeatureEngineeringStage(Stage):
                     continue
             composite_keys.append(FeatureExpr(ck.name, ck_expr))
 
+        # Enrichment joins — resolve from config to SQL builder dataclasses.
+        # Each enrichment join computes a key from source columns using a
+        # registered feature function, then LEFT JOINs an external lookup table.
+        enrichment_joins: list[EnrichmentJoin] = []
+        for ej in getattr(fc, "enrichment_joins", []):
+            ej_func = FEATURE_FUNCTIONS.get(ej.source_key_function)
+            if ej_func is None:
+                continue
+            ej_inputs = (
+                ej.source_key_inputs
+                if isinstance(ej.source_key_inputs, list)
+                else [ej.source_key_inputs]
+            )
+            ej_params = getattr(ej, "source_key_params", None) or {}
+            try:
+                key_expr = ej_func(ej_inputs, **ej_params)
+            except Exception:
+                continue
+            enrichment_joins.append(EnrichmentJoin(
+                table=ej.table,
+                alias=ej.name,
+                join_key_expression=key_expr,
+                lookup_key=ej.lookup_key,
+                columns=list(ej.columns),
+                column_prefix=getattr(ej, "column_prefix", ""),
+                match_flag=getattr(ej, "match_flag", ""),
+                join_type=getattr(ej, "type", "LEFT"),
+            ))
+
         # Clustering from ScaleConfig
         cluster_by = getattr(
             getattr(config, "scale", None), "featured_table_clustering", []
@@ -171,6 +201,7 @@ class FeatureEngineeringStage(Stage):
             dependent_features=pass2,
             blocking_keys=blocking_keys,
             composite_keys=composite_keys,
+            enrichment_joins=enrichment_joins,
             cluster_by=list(cluster_by),
         )
 

@@ -302,7 +302,11 @@ class ParameterEstimator:
                 u = lvl["u"]
                 log_w = math.log2(max(0.001, m) / max(0.001, u))
                 rows.append(
-                    f"  ('{cp.comparison_name}', '{lvl['label']}', "
+                    f"  STRUCT<comparison_name STRING, level_label STRING, "
+                    f"m_probability FLOAT64, u_probability FLOAT64, "
+                    f"log_weight FLOAT64, prior_match_prob FLOAT64, "
+                    f"estimated_at TIMESTAMP>"
+                    f"('{cp.comparison_name}', '{lvl['label']}', "
                     f"{m}, {u}, {round(log_w, 6)}, "
                     f"{round(params.prior_match_prob, 6)}, CURRENT_TIMESTAMP())"
                 )
@@ -310,10 +314,6 @@ class ParameterEstimator:
         return (
             f"CREATE OR REPLACE TABLE `{target_table}` AS\n"
             f"SELECT * FROM UNNEST([\n"
-            f"  STRUCT<comparison_name STRING, level_label STRING, "
-            f"m_probability FLOAT64, u_probability FLOAT64, "
-            f"log_weight FLOAT64, prior_match_prob FLOAT64, "
-            f"estimated_at TIMESTAMP>(\n"
             f"{values}\n"
-            f")])"
+            f"])"
         ) if rows else ""

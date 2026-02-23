@@ -3,6 +3,27 @@
 Generates SQL for:
 1. Connected components via iterative minimum-cluster-id propagation
 2. Cluster quality metrics (singleton ratio, max size, confidence stats)
+
+Clustering Performance Notes
+=============================
+Connected components runs iteratively until convergence. Each iteration:
+  1. JOINs cluster_table × all_matches on entity_uid (INT64) — fast
+  2. Computes MIN(cluster_id) for each entity via GROUP BY — INT64 agg
+  3. Replaces cluster_table with updated assignments
+
+All columns involved are INT64:
+  - entity_uid: INT64 (FARM_FINGERPRINT from staging)
+  - cluster_id: INT64 (initialized to entity_uid, propagated via MIN)
+  - left_entity_uid / right_entity_uid: INT64
+
+This means ALL JOINs and aggregations in the clustering loop operate on
+fixed-width 8-byte integers — the optimal case for BigQuery's columnar
+storage engine. No STRING comparisons occur during clustering.
+
+The OR in the LEFT JOIN (ON uid = uid1 OR uid = uid2) may prevent BQ from
+using a pure hash-join. For very large match tables (>100M edges), consider
+normalizing edges into a symmetric edge list (uid1→uid2 UNION uid2→uid1)
+to enable two separate equi-joins instead of one OR-join.
 """
 
 from __future__ import annotations
@@ -69,7 +90,9 @@ def build_cluster_assignment_sql(params: ClusteringParams) -> SQLExpression:
     lines.append("DECLARE rows_updated INT64 DEFAULT 1;")
     lines.append("")
 
-    # Step 1: Initialize ALL entities as their own cluster (singletons)
+    # Step 1: Initialize ALL entities as their own cluster (singletons).
+    # PERF: entity_uid is INT64, so cluster_id starts as INT64. All subsequent
+    # MIN/LEAST operations stay in INT64 space — no type conversions needed.
     lines.append(
         f"CREATE OR REPLACE TABLE `{params.cluster_table}` AS"
     )
@@ -263,9 +286,15 @@ def build_populate_canonical_index_sql(
 
     Updates cluster_ids for prior entities that were re-clustered,
     and inserts new entities from the current batch.
+
+    PERF: All JOINs use entity_uid (INT64) and cluster_id (INT64).
+    The UPDATE...FROM pattern is efficient in BQ for targeted row updates.
+    The NOT IN subquery on INT64 is well-optimized by BQ's query engine.
+    For canonical tables >100M rows, consider LEFT JOIN WHERE IS NULL instead.
     """
     sql = (
         f"-- Update cluster_ids for prior entities that were re-clustered\n"
+        f"-- PERF: UPDATE...FROM on INT64 key — efficient targeted update\n"
         f"UPDATE `{params.canonical_table}` ci\n"
         f"SET {CLUSTER_ID} = cl.{CLUSTER_ID}\n"
         f"FROM `{params.cluster_table}` cl\n"
@@ -273,6 +302,7 @@ def build_populate_canonical_index_sql(
         f"  AND ci.{CLUSTER_ID} != cl.{CLUSTER_ID};\n"
         f"\n"
         f"-- Insert new entities from current batch\n"
+        f"-- PERF: NOT IN on INT64 is fast; BQ converts to anti-semi-join\n"
         f"INSERT INTO `{params.canonical_table}`\n"
         f"SELECT f.*, cl.{CLUSTER_ID}\n"
         f"FROM `{params.source_table}` f\n"

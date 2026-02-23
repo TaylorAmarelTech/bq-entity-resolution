@@ -10,6 +10,7 @@ the system generates the full configuration.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
@@ -106,56 +107,79 @@ ROLE_FEATURES: dict[str, list[tuple[str, str]]] = {
 
 # Each role maps to blocking keys to generate.
 # Format: (key_name_suffix, function)
+#
+# BLOCKING KEY TYPE STRATEGY:
+# We use two patterns based on the column semantics:
+#
+# 1. FARM_FINGERPRINT → INT64 (fp_ prefix) for HIGH-CARDINALITY identifiers:
+#    policy_number, claim_number, account_number, npi, mrn
+#    These are unique-ish values where exact-match blocking is desired.
+#    INT64 equi-join is ~3-5x faster than STRING equi-join in BigQuery.
+#
+# 2. STRING functions for LOW-CARDINALITY phonetic/partial keys:
+#    soundex (4 chars), email_domain, phone_last4, zip3, ssn_last4
+#    These intentionally produce coarse buckets to enable fuzzy matching.
+#    The join fanout is controlled by the low cardinality, not the type.
+#
+# 3. INT64 via EXTRACT for DATE columns:
+#    dob_year, year_of_date → INT64 natively.
+#
+# For very large tables (>100M rows), consider upgrading STRING blocking
+# keys to their INT64 equivalents via FARM_FINGERPRINT wrapping:
+#    soundex → FARM_FINGERPRINT(SOUNDEX(col))  — same buckets, faster join
+#    email_domain → FARM_FINGERPRINT(email_domain) — INT64 join
 
 ROLE_BLOCKING_KEYS: dict[str, list[tuple[str, str]]] = {
+    # STRING blocking keys — low cardinality, acceptable performance
     "first_name": [
-        ("first_soundex", "soundex"),
+        ("first_soundex", "soundex"),      # STRING(4) — ~7K distinct values
     ],
     "last_name": [
-        ("last_soundex", "soundex"),
+        ("last_soundex", "soundex"),       # STRING(4) — ~7K distinct values
     ],
     "full_name": [
-        ("name_soundex", "soundex"),
+        ("name_soundex", "soundex"),       # STRING(4)
     ],
     "date_of_birth": [
-        ("dob_year", "dob_year"),
+        ("dob_year", "dob_year"),          # INT64 — ~100 distinct values, fast
     ],
     "email": [
-        ("email_domain", "email_domain"),
+        ("email_domain", "email_domain"),  # STRING — ~10K distinct domains
     ],
     "phone": [
-        ("phone_last4", "phone_last_four"),
+        ("phone_last4", "phone_last_four"),  # STRING(4) — 10K distinct values
     ],
     "zip_code": [
-        ("zip3", "zip3"),
+        ("zip3", "zip3"),                  # STRING(3) — ~1K distinct values
     ],
     "ssn": [
-        ("ssn_last4", "ssn_last_four"),
+        ("ssn_last4", "ssn_last_four"),    # STRING(4) — 10K distinct values
     ],
     "company_name": [
-        ("company_soundex", "soundex"),
+        ("company_soundex", "soundex"),    # STRING(4)
     ],
     # --- Insurance / Financial / Healthcare ---
+    # INT64 blocking keys — high cardinality, FARM_FINGERPRINT for speed
     "policy_number": [
-        ("policy_fp", "farm_fingerprint"),
+        ("policy_fp", "farm_fingerprint"),    # INT64 — exact match on identifier
     ],
     "claim_number": [
-        ("claim_fp", "farm_fingerprint"),
+        ("claim_fp", "farm_fingerprint"),     # INT64 — exact match on identifier
     ],
     "account_number": [
-        ("account_fp", "farm_fingerprint"),
+        ("account_fp", "farm_fingerprint"),   # INT64 — exact match on identifier
     ],
     "npi": [
-        ("npi_fp", "farm_fingerprint"),
+        ("npi_fp", "farm_fingerprint"),       # INT64 — exact match on identifier
     ],
     "mrn": [
-        ("mrn_fp", "farm_fingerprint"),
+        ("mrn_fp", "farm_fingerprint"),       # INT64 — exact match on identifier
     ],
     "transaction_date": [
-        ("txn_date_year", "year_of_date"),
+        ("txn_date_year", "year_of_date"),    # INT64 — year extraction
     ],
     "date_of_loss": [
-        ("dol_year", "year_of_date"),
+        ("dol_year", "year_of_date"),         # INT64 — year extraction
     ],
 }
 
@@ -347,9 +371,13 @@ def detect_role(column_name: str) -> str | None:
     if lower in _NAME_PATTERNS:
         return _NAME_PATTERNS[lower]
 
-    # Substring match (longest first for specificity)
+    # Word-boundary match: pattern must appear as a standalone token
+    # separated by underscores, or at the start/end of the name.
+    # Longest patterns first for specificity.
     for pattern in sorted(_NAME_PATTERNS.keys(), key=len, reverse=True):
-        if pattern in lower:
+        # Check if pattern appears as a complete word segment
+        # Pattern must be bounded by start/end of string or underscores
+        if re.search(rf'(?:^|_){re.escape(pattern)}(?:_|$)', lower):
             return _NAME_PATTERNS[pattern]
 
     return None

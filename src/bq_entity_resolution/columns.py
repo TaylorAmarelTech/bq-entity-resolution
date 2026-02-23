@@ -14,8 +14,12 @@ SOURCE METADATA (source_ prefix)
 PIPELINE METADATA (pipeline_ prefix)
     Pipeline operation tracking: pipeline_loaded_at, pipeline_run_id
 
-FINGERPRINT / HASH (fp_ prefix)
+FINGERPRINT / HASH (fp_ prefix) — INT64 columns, optimal for JOINs
     FARM_FINGERPRINT or hash-based blocking keys: fp_policy_number, fp_lsh_bucket_0
+    These are INT64 values produced by FARM_FINGERPRINT(). Equi-joins on
+    fp_ columns are ~3-5x faster than on equivalent STRING columns because
+    BQ compares 8 fixed bytes instead of variable-length byte arrays.
+    Use fp_ columns as blocking keys wherever possible.
 
 MATCH SCORING (match_ prefix)
     Matching step outputs: match_total_score, match_confidence, match_tier_name
@@ -23,8 +27,11 @@ MATCH SCORING (match_ prefix)
 BQML PREDICTED (bqml_predicted_ prefix)
     BigQuery ML model predictions: bqml_predicted_embedding
 
-BLOCKING KEYS (bk_ prefix)
+BLOCKING KEYS (bk_ prefix) — STRING or INT64, depends on the function
     Non-hash blocking keys: bk_first_soundex, bk_dob_year
+    Some bk_ columns are STRING (soundex, email_domain) and some are INT64
+    (dob_year, year_of_date). For large-scale performance, consider
+    upgrading STRING bk_ keys to fp_ keys via FARM_FINGERPRINT wrapping.
 
 TERM FREQUENCY (term_frequency_ prefix)
     TF statistics: term_frequency_column, term_frequency_ratio
@@ -51,7 +58,12 @@ PREFIX_TERM_FREQUENCY = "term_frequency_"
 # Entity Identity (no prefix — reserved names)
 # ---------------------------------------------------------------------------
 
+# INT64 — FARM_FINGERPRINT(CONCAT(source_name, '||', unique_key)). The universal
+# join key for the entire pipeline. All blocking, matching, and clustering JOINs
+# use this column. INT64 enables hash-join optimization throughout.
 ENTITY_UID = "entity_uid"
+# INT64 — initialized from entity_uid, propagated via MIN() in clustering loop.
+# All clustering JOINs and aggregations operate on this INT64 column.
 CLUSTER_ID = "cluster_id"
 RESOLVED_ENTITY_ID = "resolved_entity_id"
 CANONICAL_ENTITY_UID = "canonical_entity_uid"
@@ -75,6 +87,8 @@ PIPELINE_RUN_ID = "pipeline_run_id"
 # Blocking (pair columns)
 # ---------------------------------------------------------------------------
 
+# INT64 pair columns — candidate pairs and match results use these for JOINs.
+# Both are entity_uid values, so all pair-level operations are INT64.
 LEFT_ENTITY_UID = "left_entity_uid"
 RIGHT_ENTITY_UID = "right_entity_uid"
 BLOCKING_PATH = "blocking_path"

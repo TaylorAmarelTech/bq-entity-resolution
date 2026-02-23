@@ -11,6 +11,7 @@ PipelineConfig.
 
 from __future__ import annotations
 
+from bq_entity_resolution.exceptions import ConfigurationError
 from bq_entity_resolution.config.schema import (
     ActiveLearningConfig,
     BlockingKeyDef,
@@ -68,7 +69,7 @@ def quick_config(
     # Resolve column roles
     role_map = _resolve_roles(columns, column_roles)
     if not role_map:
-        raise ValueError(
+        raise ConfigurationError(
             "No columns with recognized roles. Provide column_roles "
             "explicitly or use column names that match common patterns "
             "(first_name, last_name, email, etc.)."
@@ -114,7 +115,7 @@ def person_dedup_preset(
         project_name: Project name for dataset naming.
     """
     if not columns:
-        raise ValueError(
+        raise ConfigurationError(
             "columns dict required: {column_name: role}. "
             "Common roles: first_name, last_name, date_of_birth, "
             "email, phone, address_line_1, city, state, zip_code, ssn"
@@ -151,7 +152,7 @@ def person_linkage_preset(
         project_name: Project name.
     """
     if not source_tables or len(source_tables) < 2:
-        raise ValueError("At least 2 source tables required for linkage")
+        raise ConfigurationError("At least 2 source tables required for linkage")
 
     # Build column mappings
     col_mappings = [
@@ -215,7 +216,7 @@ def insurance_dedup_preset(
         project_name: Project name.
     """
     if not columns:
-        raise ValueError(
+        raise ConfigurationError(
             "columns dict required: {column_name: role}. "
             "Common roles: policy_number, claim_number, first_name, "
             "last_name, date_of_birth, date_of_loss, ssn, phone, email"
@@ -256,7 +257,7 @@ def financial_transaction_preset(
         project_name: Project name.
     """
     if not columns:
-        raise ValueError(
+        raise ConfigurationError(
             "columns dict required: {column_name: role}. "
             "Common roles: account_number, routing_number, "
             "transaction_amount, transaction_date, first_name, last_name"
@@ -297,7 +298,7 @@ def healthcare_patient_preset(
         project_name: Project name.
     """
     if not columns:
-        raise ValueError(
+        raise ConfigurationError(
             "columns dict required: {column_name: role}. "
             "Common roles: npi, mrn, first_name, last_name, "
             "date_of_birth, address_line_1, city, state, zip_code, "
@@ -336,7 +337,7 @@ def business_dedup_preset(
         project_name: Project name.
     """
     if not columns:
-        raise ValueError(
+        raise ConfigurationError(
             "columns dict required: {column_name: role}. "
             "Common roles: company_name, ein, address_line_1, "
             "city, state, zip_code, phone, email"
@@ -487,9 +488,9 @@ def _build_default_tiers(
     If only one blocking key exists, both tiers use the same key.
     """
     if not blocking_key_names:
-        raise ValueError("No blocking keys generated from roles")
+        raise ConfigurationError("No blocking keys generated from roles")
     if not comparison_pool:
-        raise ValueError("No comparisons generated from roles")
+        raise ConfigurationError("No comparisons generated from roles")
 
     # Build pool ref comparisons (tier references the pool by name)
     pool_refs = [ComparisonDef(ref=name) for name in comparison_pool]

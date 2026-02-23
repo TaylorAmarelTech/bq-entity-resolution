@@ -41,6 +41,29 @@ class CustomJoin:
 
 
 @dataclass(frozen=True)
+class EnrichmentJoin:
+    """A lookup table enrichment join for feature engineering.
+
+    Enrichment joins bring in external reference data (e.g., Census-standardized
+    addresses, vendor lookups) by computing a join key from source columns using
+    a registered feature function and matching against a lookup table.
+
+    PERF: When join_key_expression produces INT64 (e.g., via FARM_FINGERPRINT),
+    the LEFT JOIN runs at INT64 speed — ~3-5x faster than STRING joins.
+    The enrichment columns are then available for downstream feature computation,
+    blocking, and matching.
+    """
+    table: str                  # Fully-qualified BQ table
+    alias: str                  # JOIN alias (typically the enrichment name)
+    join_key_expression: str    # SQL expression computed from source columns
+    lookup_key: str             # Column in the lookup table to join on
+    columns: list[str]          # Columns to SELECT from the lookup table
+    column_prefix: str = ""     # Prefix for output column names
+    match_flag: str = ""        # If set, auto-generates a 0/1 INT64 flag column
+    join_type: str = "LEFT"     # LEFT (default) or INNER
+
+
+@dataclass(frozen=True)
 class TFColumn:
     """A column to compute term frequencies for."""
     column_name: str
@@ -58,17 +81,24 @@ class FeatureParams:
     blocking_keys: list[FeatureExpr] = field(default_factory=list)
     composite_keys: list[FeatureExpr] = field(default_factory=list)
     custom_joins: list[CustomJoin] = field(default_factory=list)
+    enrichment_joins: list[EnrichmentJoin] = field(default_factory=list)
     cluster_by: list[str] = field(default_factory=list)
 
 
 def build_features_sql(params: FeatureParams) -> SQLExpression:
     """Build feature engineering SQL.
 
-    Three-pass CTE:
+    Multi-pass CTE:
     - base: UNION ALL of staged sources
+    - enriched (optional): LEFT JOIN to lookup tables for enrichment
     - features_pass1: independent features from source columns
     - featured: dependent features that reference pass 1 columns
     - Final SELECT: blocking keys and composite keys
+
+    When enrichment_joins are configured, an 'enriched' CTE is inserted
+    between 'base' and 'features_pass1'. This brings in external reference
+    data (Census-standardized addresses, GPS coordinates, etc.) that
+    downstream features can reference.
     """
     parts: list[str] = []
 
@@ -108,16 +138,59 @@ def build_features_sql(params: FeatureParams) -> SQLExpression:
     parts.append("),")
     parts.append("")
 
-    # Pass 1: Independent features
+    # Enrichment joins: optional CTE that LEFT JOINs external lookup tables.
+    # PERF: Enrichment joins using FARM_FINGERPRINT keys are INT64 equi-joins,
+    # running at ~3-5x the speed of equivalent STRING joins.
+    has_enrichment = bool(params.enrichment_joins)
+    if has_enrichment:
+        parts.append("enriched AS (")
+        parts.append("  SELECT")
+        parts.append("    b.*,")
+
+        # Add columns from each enrichment join
+        enrichment_cols: list[str] = []
+        for ej in params.enrichment_joins:
+            for col in ej.columns:
+                output_name = f"{ej.column_prefix}{col}" if ej.column_prefix else col
+                enrichment_cols.append(
+                    f"    {ej.alias}.{col} AS {output_name}"
+                )
+            if ej.match_flag:
+                # Auto-generate a 0/1 INT64 match flag based on first column
+                first_col = ej.columns[0] if ej.columns else ej.lookup_key
+                enrichment_cols.append(
+                    f"    CASE WHEN {ej.alias}.{first_col} IS NOT NULL "
+                    f"THEN 1 ELSE 0 END AS {ej.match_flag}"
+                )
+
+        parts.append(",\n".join(enrichment_cols))
+        parts.append("  FROM base b")
+
+        for ej in params.enrichment_joins:
+            parts.append(
+                f"  {ej.join_type} JOIN `{ej.table}` AS {ej.alias}"
+            )
+            parts.append(
+                f"    ON {ej.join_key_expression} = {ej.alias}.{ej.lookup_key}"
+            )
+
+        parts.append("),")
+        parts.append("")
+
+    # Pass 1: Independent features.
+    # Source CTE is 'enriched' if enrichment joins exist, otherwise 'base'.
+    source_cte = "enriched" if has_enrichment else "base"
+    source_alias = "e" if has_enrichment else "b"
+
     parts.append("features_pass1 AS (")
     parts.append("  SELECT")
-    parts.append("    b.*,")
+    parts.append(f"    {source_alias}.*,")
 
     for i, feat in enumerate(params.feature_expressions):
         comma = "," if i < len(params.feature_expressions) - 1 else ""
         parts.append(f"    {feat.expression} AS {feat.name}{comma}")
 
-    parts.append("  FROM base b")
+    parts.append(f"  FROM {source_cte} {source_alias}")
 
     for join in params.custom_joins:
         parts.append(f"  LEFT JOIN `{join.table}` AS {join.alias}")

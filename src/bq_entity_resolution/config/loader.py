@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from bq_entity_resolution.config.schema import PipelineConfig
+from bq_entity_resolution.config.validators import validate_full
 from bq_entity_resolution.exceptions import ConfigurationError
 
 ENV_VAR_PATTERN = re.compile(r"\$\{([^}^{]+)\}")
@@ -109,6 +110,7 @@ def load_config(
     defaults_path: str | Path | None = None,
     overrides: dict[str, Any] | None = None,
     skip_env_interpolation: bool = False,
+    validate: bool = True,
 ) -> PipelineConfig:
     """
     Load, merge, interpolate, and validate pipeline configuration.
@@ -163,6 +165,12 @@ def load_config(
 
     # Validate with Pydantic
     try:
-        return PipelineConfig(**merged)
+        config = PipelineConfig(**merged)
     except Exception as exc:
         raise ConfigurationError(f"Configuration validation failed: {exc}") from exc
+
+    # Cross-field validation (comparison columns exist, feature inputs valid, etc.)
+    if validate:
+        validate_full(config)
+
+    return config

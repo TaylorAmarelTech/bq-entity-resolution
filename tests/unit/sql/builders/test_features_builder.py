@@ -1,6 +1,7 @@
 """Tests for the features SQL builder."""
 
 from bq_entity_resolution.sql.builders.features import (
+    EnrichmentJoin,
     FeatureParams,
     FeatureExpr,
     CustomJoin,
@@ -157,3 +158,189 @@ def test_features_returns_sql_expression():
     expr = build_features_sql(params)
     assert expr.is_raw is True
     assert isinstance(expr.render(), str)
+
+
+# ---------------------------------------------------------------------------
+# Enrichment join tests
+# ---------------------------------------------------------------------------
+
+
+def test_enrichment_join_basic():
+    """Enrichment join inserts an 'enriched' CTE with LEFT JOIN."""
+    params = FeatureParams(
+        target_table="proj.ds.featured",
+        source_tables=["proj.ds.staged"],
+        source_columns=["address_line_1", "city", "state"],
+        feature_expressions=[FeatureExpr("addr_upper", "UPPER(address_line_1)")],
+        enrichment_joins=[
+            EnrichmentJoin(
+                table="proj.census.address_lookup",
+                alias="census",
+                join_key_expression=(
+                    "FARM_FINGERPRINT(CONCAT("
+                    "COALESCE(CAST(address_line_1 AS STRING), ''), '||', "
+                    "COALESCE(CAST(city AS STRING), ''), '||', "
+                    "COALESCE(CAST(state AS STRING), '')))"
+                ),
+                lookup_key="address_fp",
+                columns=["matched_address", "latitude", "longitude"],
+                column_prefix="census_",
+                match_flag="has_census_match",
+            ),
+        ],
+    )
+    expr = build_features_sql(params)
+    sql = expr.render()
+
+    # Enriched CTE should exist
+    assert "enriched AS" in sql
+
+    # Columns should have prefix
+    assert "census.matched_address AS census_matched_address" in sql
+    assert "census.latitude AS census_latitude" in sql
+    assert "census.longitude AS census_longitude" in sql
+
+    # Match flag should be generated
+    assert "has_census_match" in sql
+    assert "CASE WHEN census.matched_address IS NOT NULL THEN 1 ELSE 0 END" in sql
+
+    # LEFT JOIN on the computed key
+    assert "LEFT JOIN `proj.census.address_lookup` AS census" in sql
+    assert "FARM_FINGERPRINT(CONCAT(" in sql
+    assert "= census.address_fp" in sql
+
+    # Pass 1 should reference enriched, not base
+    assert "FROM enriched e" in sql
+
+
+def test_enrichment_join_no_prefix():
+    """Enrichment join without column_prefix uses raw column names."""
+    params = FeatureParams(
+        target_table="proj.ds.featured",
+        source_tables=["proj.ds.staged"],
+        source_columns=["name"],
+        feature_expressions=[FeatureExpr("upper_name", "UPPER(name)")],
+        enrichment_joins=[
+            EnrichmentJoin(
+                table="proj.ref.lookup",
+                alias="ref",
+                join_key_expression="FARM_FINGERPRINT(name)",
+                lookup_key="name_fp",
+                columns=["canonical_name", "category"],
+            ),
+        ],
+    )
+    expr = build_features_sql(params)
+    sql = expr.render()
+
+    assert "ref.canonical_name AS canonical_name" in sql
+    assert "ref.category AS category" in sql
+    assert "enriched AS" in sql
+
+
+def test_enrichment_join_inner():
+    """INNER enrichment join uses INNER JOIN."""
+    params = FeatureParams(
+        target_table="proj.ds.featured",
+        source_tables=["proj.ds.staged"],
+        source_columns=["ssn"],
+        feature_expressions=[FeatureExpr("ssn_clean", "REGEXP_REPLACE(ssn, r'[^0-9]', '')")],
+        enrichment_joins=[
+            EnrichmentJoin(
+                table="proj.ref.verified_ssn",
+                alias="verified",
+                join_key_expression="FARM_FINGERPRINT(ssn)",
+                lookup_key="ssn_fp",
+                columns=["verified_name"],
+                join_type="INNER",
+            ),
+        ],
+    )
+    expr = build_features_sql(params)
+    sql = expr.render()
+
+    assert "INNER JOIN `proj.ref.verified_ssn` AS verified" in sql
+
+
+def test_no_enrichment_joins_no_enriched_cte():
+    """Without enrichment joins, no 'enriched' CTE is generated."""
+    params = FeatureParams(
+        target_table="proj.ds.featured",
+        source_tables=["proj.ds.staged"],
+        source_columns=["name"],
+        feature_expressions=[FeatureExpr("upper_name", "UPPER(name)")],
+    )
+    expr = build_features_sql(params)
+    sql = expr.render()
+
+    assert "enriched AS" not in sql
+    assert "FROM base b" in sql
+
+
+def test_enrichment_join_with_features_and_blocking():
+    """Enrichment columns are available for feature computation and blocking."""
+    params = FeatureParams(
+        target_table="proj.ds.featured",
+        source_tables=["proj.ds.staged"],
+        source_columns=["address_line_1"],
+        feature_expressions=[
+            FeatureExpr("addr_fp", "FARM_FINGERPRINT(census_matched_address)"),
+        ],
+        blocking_keys=[
+            FeatureExpr("bk_census_addr", "FARM_FINGERPRINT(census_matched_address)"),
+        ],
+        enrichment_joins=[
+            EnrichmentJoin(
+                table="proj.census.lookup",
+                alias="census",
+                join_key_expression="FARM_FINGERPRINT(address_line_1)",
+                lookup_key="address_fp",
+                columns=["matched_address"],
+                column_prefix="census_",
+                match_flag="has_census_match",
+            ),
+        ],
+    )
+    expr = build_features_sql(params)
+    sql = expr.render()
+
+    # Enrichment columns flow through to features and blocking
+    assert "census_matched_address" in sql
+    assert "FARM_FINGERPRINT(census_matched_address) AS addr_fp" in sql
+    assert "FARM_FINGERPRINT(census_matched_address) AS bk_census_addr" in sql
+
+
+def test_multiple_enrichment_joins():
+    """Multiple enrichment joins produce multiple LEFT JOINs in the enriched CTE."""
+    params = FeatureParams(
+        target_table="proj.ds.featured",
+        source_tables=["proj.ds.staged"],
+        source_columns=["address_line_1", "company_name"],
+        feature_expressions=[FeatureExpr("x", "1")],
+        enrichment_joins=[
+            EnrichmentJoin(
+                table="proj.census.lookup",
+                alias="census",
+                join_key_expression="FARM_FINGERPRINT(address_line_1)",
+                lookup_key="address_fp",
+                columns=["matched_address"],
+                column_prefix="census_",
+            ),
+            EnrichmentJoin(
+                table="proj.ref.companies",
+                alias="company_ref",
+                join_key_expression="FARM_FINGERPRINT(UPPER(company_name))",
+                lookup_key="company_fp",
+                columns=["sic_code", "industry"],
+                column_prefix="ref_",
+            ),
+        ],
+    )
+    expr = build_features_sql(params)
+    sql = expr.render()
+
+    assert "LEFT JOIN `proj.census.lookup` AS census" in sql
+    assert "LEFT JOIN `proj.ref.companies` AS company_ref" in sql
+    assert "census_matched_address" in sql
+    assert "ref_sic_code" in sql
+    assert "ref_industry" in sql

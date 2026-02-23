@@ -6,6 +6,31 @@ Generates SQL for two scoring strategies:
 
 Both support hard negatives, soft signals, term frequency adjustments,
 and audit trail output.
+
+BigQuery Scoring Performance Notes
+====================================
+The scoring SQL runs per candidate pair. If blocking produces N pairs,
+every comparison expression is evaluated N times. Optimizations:
+
+1. COMPARISON ORDERING: Comparisons are emitted in declaration order.
+   For best performance, declare cheap comparisons first (exact on INT64,
+   numeric_within) and expensive ones last (jaro_winkler, cosine_similarity).
+   BigQuery evaluates CASE WHEN sequentially and can skip branches.
+   See COMPARISON_COSTS in matching/comparisons.py for cost ranking.
+
+2. JOIN PATTERN: Candidate pairs → source table uses INNER JOIN on
+   entity_uid (INT64). This is the tightest possible join — 8 bytes
+   per probe. The source table should be CLUSTER BY entity_uid for
+   co-located reads.
+
+3. TF JOINS: Each term-frequency-enabled comparison adds a LEFT JOIN
+   to the tf_stats table. Keep TF comparisons minimal (1-3 max) to
+   avoid join explosion. TF joins use STRING keys (column name + value).
+
+4. HARD NEGATIVES: "disqualify" negatives become WHERE filters, applied
+   BEFORE scoring. This eliminates pairs early and avoids wasted
+   comparison computation. Place cheap conditions (INT64 inequality,
+   NULL checks) as disqualify negatives for best pruning.
 """
 
 from __future__ import annotations
@@ -208,7 +233,10 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
     parts.append(f"    ) AS {MATCH_TOTAL_SCORE}")
     parts.append("")
 
-    # FROM clause with joins
+    # FROM clause with joins.
+    # PERF: Both JOINs are on entity_uid (INT64) — this is the fastest
+    # possible join pattern. The source table should be CLUSTER BY entity_uid
+    # so BQ can co-locate the left and right lookups in storage.
     parts.append(f"  FROM `{params.candidates_table}` c")
     parts.append(
         f"  INNER JOIN `{params.source_table}` l ON c.{LEFT_ENTITY_UID} = l.{ENTITY_UID}"
@@ -217,10 +245,15 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
         f"  INNER JOIN `{params.source_table}` r ON c.{RIGHT_ENTITY_UID} = r.{ENTITY_UID}"
     )
 
-    # TF joins
+    # TF joins — each adds a LEFT JOIN on STRING keys (column_name, value).
+    # PERF: Keep TF-enabled comparisons to a minimum (1-3) to avoid
+    # join explosion. Each TF join scans the tf_stats table.
     parts.extend(_build_tf_joins(params.comparisons, params.tf_table))
 
-    # WHERE clause
+    # WHERE clause — disqualify hard negatives filter pairs BEFORE scoring.
+    # PERF: This is the most important optimization point. Disqualify
+    # filters that use INT64 inequality or NULL checks eliminate pairs
+    # before any expensive comparison runs.
     parts.append("  WHERE 1=1")
     parts.extend(_build_disqualify_filters(params.hard_negatives))
     parts.append(")")
@@ -341,7 +374,9 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
     parts.append(f"    ) AS {MATCH_TOTAL_SCORE}")
     parts.append("")
 
-    # FROM clause
+    # FROM clause — same INT64 join pattern as sum scoring.
+    # PERF: entity_uid is INT64 throughout the pipeline (FARM_FINGERPRINT-based).
+    # Both INNER JOINs are 8-byte hash probes — minimal overhead.
     parts.append(f"  FROM `{params.candidates_table}` c")
     parts.append(
         f"  INNER JOIN `{params.source_table}` l ON c.{LEFT_ENTITY_UID} = l.{ENTITY_UID}"
@@ -353,7 +388,7 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
     # TF joins
     parts.extend(_build_tf_joins(params.comparisons, params.tf_table))
 
-    # WHERE clause
+    # WHERE clause — disqualify filters eliminate pairs before log-weight computation.
     parts.append("  WHERE 1=1")
     parts.extend(_build_disqualify_filters(params.hard_negatives))
     parts.append(")")
@@ -394,3 +429,33 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
         parts.append(f"WHERE {MATCH_TOTAL_SCORE} >= {params.threshold.min_score}")
 
     return SQLExpression.from_raw("\n".join(parts))
+
+
+def build_init_matches_sql(target_table: str, source_table: str) -> SQLExpression:
+    """Build SQL to initialize the all_matches table from the first tier's matches.
+
+    Creates the accumulated matches table with the same schema as the
+    per-tier matches table.
+    """
+    sql = (
+        f"CREATE OR REPLACE TABLE `{target_table}` AS\n"
+        f"SELECT * FROM `{source_table}`"
+    )
+    return SQLExpression.from_raw(sql)
+
+
+def build_accumulate_matches_sql(target_table: str, source_table: str) -> SQLExpression:
+    """Build SQL to accumulate matches from a subsequent tier.
+
+    Inserts new matches from the current tier into the accumulated
+    matches table, avoiding duplicates.
+    """
+    sql = (
+        f"INSERT INTO `{target_table}`\n"
+        f"SELECT s.* FROM `{source_table}` s\n"
+        f"LEFT JOIN `{target_table}` t\n"
+        f"  ON s.left_entity_uid = t.left_entity_uid\n"
+        f"  AND s.right_entity_uid = t.right_entity_uid\n"
+        f"WHERE t.left_entity_uid IS NULL"
+    )
+    return SQLExpression.from_raw(sql)
