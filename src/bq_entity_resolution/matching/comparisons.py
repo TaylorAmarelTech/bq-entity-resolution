@@ -20,6 +20,42 @@ ComparisonFunction = Callable[..., str]
 
 COMPARISON_FUNCTIONS: dict[str, ComparisonFunction] = {}
 
+# Relative cost of each comparison method (lower = cheaper).
+# Used to sort comparisons so cheap ones execute first in SQL.
+COMPARISON_COSTS: dict[str, int] = {
+    # Tier 1: O(1) integer/hash/null comparisons
+    "exact": 1,
+    "exact_or_null": 1,
+    "different": 1,
+    "null_either": 1,
+    "numeric_within": 1,
+    "date_within_days": 1,
+    "exact_case_insensitive": 2,
+    "length_mismatch": 2,
+    # Tier 2: simple string ops
+    "soundex_match": 3,
+    "starts_with": 5,
+    "contains": 5,
+    "abbreviation_match": 5,
+    # Tier 3: O(n) edit distance
+    "levenshtein": 10,
+    "levenshtein_normalized": 12,
+    "levenshtein_score": 12,
+    # Tier 4: UDF calls (JS execution overhead)
+    "metaphone_match": 15,
+    "double_metaphone_match": 15,
+    "initials_match": 15,
+    "jaro_winkler": 20,
+    "jaro_winkler_score": 20,
+    # Tier 5: complex subqueries / ML / geo
+    "geo_within_km": 25,
+    "geo_distance_score": 25,
+    "token_set_match": 30,
+    "token_set_score": 30,
+    "cosine_similarity": 50,
+    "cosine_similarity_score": 50,
+}
+
 
 def register(name: str) -> Callable[[ComparisonFunction], ComparisonFunction]:
     """Decorator to register a comparison function."""
@@ -258,16 +294,16 @@ def token_set_match(left: str, right: str, min_overlap: float = 0.5, **_: Any) -
     """Token overlap ratio >= threshold. Handles name word transpositions.
 
     Computes |intersection| / |union| of word tokens (Jaccard similarity).
+    Uses inclusion-exclusion (|A| + |B| - |A∩B|) to avoid redundant SPLIT calls.
     """
     return (
         f"(SAFE_DIVIDE("
-        f"  (SELECT COUNT(*) FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w "
-        f"   WHERE w IN UNNEST(SPLIT(UPPER(r.{right}), ' '))),"
-        f"  (SELECT COUNT(DISTINCT w) FROM ("
-        f"    SELECT w FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w "
-        f"    UNION DISTINCT "
-        f"    SELECT w FROM UNNEST(SPLIT(UPPER(r.{right}), ' ')) AS w"
-        f"  ))"
+        f"  (SELECT COUNTIF(w IN UNNEST(SPLIT(UPPER(r.{right}), ' '))) "
+        f"   FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w),"
+        f"  ARRAY_LENGTH(SPLIT(UPPER(l.{left}), ' ')) + "
+        f"  ARRAY_LENGTH(SPLIT(UPPER(r.{right}), ' ')) - "
+        f"  (SELECT COUNTIF(w IN UNNEST(SPLIT(UPPER(r.{right}), ' '))) "
+        f"   FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w)"
         f") >= {min_overlap} "
         f"AND l.{left} IS NOT NULL AND r.{right} IS NOT NULL)"
     )
@@ -275,17 +311,19 @@ def token_set_match(left: str, right: str, min_overlap: float = 0.5, **_: Any) -
 
 @register("token_set_score")
 def token_set_score(left: str, right: str, **_: Any) -> str:
-    """Token overlap ratio as a score (Jaccard similarity of word tokens)."""
+    """Token overlap ratio as a score (Jaccard similarity of word tokens).
+
+    Uses inclusion-exclusion (|A| + |B| - |A∩B|) to avoid redundant SPLIT calls.
+    """
     return (
         f"CASE WHEN l.{left} IS NOT NULL AND r.{right} IS NOT NULL THEN "
         f"SAFE_DIVIDE("
-        f"  (SELECT COUNT(*) FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w "
-        f"   WHERE w IN UNNEST(SPLIT(UPPER(r.{right}), ' '))),"
-        f"  (SELECT COUNT(DISTINCT w) FROM ("
-        f"    SELECT w FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w "
-        f"    UNION DISTINCT "
-        f"    SELECT w FROM UNNEST(SPLIT(UPPER(r.{right}), ' ')) AS w"
-        f"  ))"
+        f"  (SELECT COUNTIF(w IN UNNEST(SPLIT(UPPER(r.{right}), ' '))) "
+        f"   FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w),"
+        f"  ARRAY_LENGTH(SPLIT(UPPER(l.{left}), ' ')) + "
+        f"  ARRAY_LENGTH(SPLIT(UPPER(r.{right}), ' ')) - "
+        f"  (SELECT COUNTIF(w IN UNNEST(SPLIT(UPPER(r.{right}), ' '))) "
+        f"   FROM UNNEST(SPLIT(UPPER(l.{left}), ' ')) AS w)"
         f") ELSE 0.0 END"
     )
 

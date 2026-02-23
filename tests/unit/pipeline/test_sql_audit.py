@@ -1,9 +1,22 @@
 """Tests for SQL audit trail persistence."""
 
-from bq_entity_resolution.config.schema import MonitoringConfig, PipelineConfig, ProjectConfig, SourceConfig, ColumnMapping, MatchingTierConfig, TierBlockingConfig, BlockingPathDef, ComparisonDef, ThresholdConfig, FeatureEngineeringConfig, BlockingKeyDef
+from bq_entity_resolution.config.schema import (
+    BlockingKeyDef,
+    BlockingPathDef,
+    ColumnMapping,
+    ComparisonDef,
+    FeatureEngineeringConfig,
+    MatchingTierConfig,
+    MonitoringConfig,
+    PipelineConfig,
+    ProjectConfig,
+    SourceConfig,
+    ThresholdConfig,
+    TierBlockingConfig,
+)
 from bq_entity_resolution.naming import sql_audit_table
 from bq_entity_resolution.pipeline.context import PipelineContext
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.monitoring import build_persist_sql_log_sql
 
 
 def _minimal_config(**overrides):
@@ -50,27 +63,25 @@ def test_sql_audit_table_naming():
     assert result == "proj.er_meta.pipeline_sql_audit"
 
 
-def test_sql_audit_template_creates_table():
-    """Template SQL contains CREATE TABLE IF NOT EXISTS."""
-    gen = SQLGenerator()
-    sql = gen.render(
-        "monitoring/persist_sql_log.sql.j2",
+def test_sql_audit_creates_table():
+    """Builder SQL contains CREATE TABLE IF NOT EXISTS."""
+    sql_expr = build_persist_sql_log_sql(
         audit_table="proj.meta.audit",
         run_id="run_123",
         entries=[{"stage": "test", "step": "s1", "sql": "SELECT 1", "timestamp": "2024-01-01"}],
     )
+    sql = sql_expr.render()
     assert "CREATE TABLE IF NOT EXISTS" in sql
 
 
-def test_sql_audit_template_inserts_rows():
-    """Template SQL contains INSERT INTO with entries."""
-    gen = SQLGenerator()
-    sql = gen.render(
-        "monitoring/persist_sql_log.sql.j2",
+def test_sql_audit_inserts_rows():
+    """Builder SQL contains INSERT INTO with entries."""
+    sql_expr = build_persist_sql_log_sql(
         audit_table="proj.meta.audit",
         run_id="run_123",
         entries=[{"stage": "test", "step": "s1", "sql": "SELECT 1", "timestamp": "2024-01-01"}],
     )
+    sql = sql_expr.render()
     assert "INSERT INTO" in sql
     assert "run_123" in sql
     assert "SELECT 1" in sql

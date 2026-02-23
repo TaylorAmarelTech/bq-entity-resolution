@@ -21,8 +21,20 @@ from bq_entity_resolution.config.schema import (
 )
 from bq_entity_resolution.exceptions import ParameterEstimationError
 from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
-from bq_entity_resolution.naming import candidates_table, featured_table, labels_table, udf_dataset
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.naming import (
+    candidates_table,
+    featured_table,
+    labels_table,
+    udf_dataset,
+)
+from bq_entity_resolution.sql.builders.em import (
+    EMComparison,
+    EMLevel,
+    EMParams,
+    LabelEstimationParams,
+    build_em_estimation_sql,
+    build_estimate_from_labels_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,15 +80,17 @@ class TierParameters:
 class ParameterEstimator:
     """Estimates m/u probabilities from labeled data or EM."""
 
-    def __init__(self, config: PipelineConfig, sql_gen: SQLGenerator | None = None):
+    def __init__(self, config: PipelineConfig):
         self.config = config
-        self.sql_gen = sql_gen or SQLGenerator()
 
     def resolve_training_config(self, tier: MatchingTierConfig) -> TrainingConfig:
-        """Use tier-level training config, falling back to global."""
-        if tier.training.method != "none":
-            return tier.training
-        return self.config.training
+        """Resolve the effective training config for a tier.
+
+        Delegates to PipelineConfig.effective_training_config() which
+        handles the full resolution chain: tier-level → auto-retrain
+        from label feedback → global training config.
+        """
+        return self.config.effective_training_config(tier)
 
     def needs_estimation(self, tier: MatchingTierConfig) -> bool:
         """Check if this tier needs parameter estimation."""
@@ -118,28 +132,47 @@ class ParameterEstimator:
                 "labeled training requires labeled_pairs_table"
             )
         comparisons = self._build_level_expressions(tier)
-        return self.sql_gen.render(
-            "matching/estimate_from_labels.sql.j2",
+        params = LabelEstimationParams(
             labeled_pairs_table=training.labeled_pairs_table,
             source_table=featured_table(self.config),
             comparisons=comparisons,
         )
+        return build_estimate_from_labels_sql(params).render()
 
     def generate_em_estimation_sql(
         self, tier: MatchingTierConfig, training: TrainingConfig
     ) -> str:
         """Generate SQL for EM parameter estimation."""
         comparisons = self._build_level_expressions(tier)
-        return self.sql_gen.render(
-            "matching/em_estimation.sql.j2",
+
+        # Convert to EMComparison/EMLevel for the builder
+        em_comparisons: list[EMComparison] = []
+        for comp in comparisons:
+            em_levels = [
+                EMLevel(
+                    label=lvl["label"],
+                    sql_expr=lvl.get("sql_expr", ""),
+                    has_expr=lvl.get("has_expr", False),
+                )
+                for lvl in comp["levels"]
+            ]
+            em_comparisons.append(EMComparison(
+                name=comp["name"],
+                left=comp["left"],
+                right=comp["right"],
+                levels=em_levels,
+            ))
+
+        params = EMParams(
             candidates_table=candidates_table(self.config, tier.name),
             source_table=featured_table(self.config),
-            comparisons=comparisons,
+            comparisons=em_comparisons,
             max_iterations=training.em_max_iterations,
             convergence_threshold=training.em_convergence_threshold,
             sample_size=training.em_sample_size,
             initial_match_proportion=training.em_initial_match_proportion,
         )
+        return build_em_estimation_sql(params).render()
 
     def parse_estimation_results(
         self, tier: MatchingTierConfig, rows: list[dict]
@@ -182,16 +215,16 @@ class ParameterEstimator:
 
         Uses the labels table (from active learning ingestion) as the
         labeled_pairs_table for estimation. This closes the feedback loop:
-        review queue → human labels → retrain → improved matching.
+        review queue -> human labels -> retrain -> improved matching.
         """
         label_table = labels_tbl or labels_table(self.config)
         comparisons = self._build_level_expressions(tier)
-        return self.sql_gen.render(
-            "matching/estimate_from_labels.sql.j2",
+        params = LabelEstimationParams(
             labeled_pairs_table=label_table,
             source_table=featured_table(self.config),
             comparisons=comparisons,
         )
+        return build_estimate_from_labels_sql(params).render()
 
     def _build_level_expressions(self, tier: MatchingTierConfig) -> list[dict]:
         """Build SQL expressions for each comparison level.

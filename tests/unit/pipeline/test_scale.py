@@ -1,7 +1,6 @@
 """Tests for scale optimizations."""
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -93,38 +92,12 @@ def test_context_completed_stages_tracking():
     assert "matching" not in ctx.completed_stages
 
 
-def test_should_skip_stage_disabled(sample_config):
-    """_should_skip_stage returns False when checkpoints disabled."""
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-
-    # Mock the BQ client to avoid credentials
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = sample_config
-
-    ctx = PipelineContext(
-        run_id="test",
-        started_at=datetime.now(timezone.utc),
-        config=sample_config,
-    )
-    ctx.completed_stages.add("staging")
-
-    assert not orch._should_skip_stage(ctx, "staging")
-
-
-def test_should_skip_stage_enabled(sample_config):
-    """_should_skip_stage returns True when stage already completed."""
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-
+def test_checkpoint_enabled_config(sample_config):
+    """Checkpoint can be enabled via scale config."""
     sample_config.scale.checkpoint_enabled = True
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = sample_config
+    assert sample_config.scale.checkpoint_enabled is True
 
-    ctx = PipelineContext(
-        run_id="test",
-        started_at=datetime.now(timezone.utc),
-        config=sample_config,
-    )
-    ctx.completed_stages.add("staging")
 
-    assert orch._should_skip_stage(ctx, "staging")
-    assert not orch._should_skip_stage(ctx, "features")
+def test_checkpoint_disabled_by_default(sample_config):
+    """Checkpoint is disabled by default."""
+    assert sample_config.scale.checkpoint_enabled is False

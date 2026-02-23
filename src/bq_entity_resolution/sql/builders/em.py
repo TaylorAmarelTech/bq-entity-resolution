@@ -306,6 +306,59 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     return SQLExpression.from_raw("\n".join(lines))
 
 
+@dataclass(frozen=True)
+class LabelEstimationParams:
+    """Parameters for estimating m/u from labeled pairs."""
+    labeled_pairs_table: str
+    source_table: str
+    comparisons: list[dict]  # [{name, left, right, levels: [{label, sql_expr, has_expr}]}]
+
+
+def build_estimate_from_labels_sql(
+    params: LabelEstimationParams,
+) -> SQLExpression:
+    """Build SQL to estimate m/u probabilities from labeled pairs.
+
+    For each comparison and each level, computes:
+    - m = P(level outcome | is_match = TRUE)
+    - u = P(level outcome | is_match = FALSE)
+    """
+    parts: list[str] = []
+
+    for comp in params.comparisons:
+        for level in comp["levels"]:
+            if not level.get("has_expr"):
+                continue
+            sql_expr = level["sql_expr"]
+            part_lines = [
+                "SELECT",
+                f"  '{comp['name']}' AS comparison_name,",
+                f"  '{level['label']}' AS level_label,",
+                "  SAFE_DIVIDE(",
+                f"    COUNTIF(lp.is_match AND ({sql_expr})),",
+                "    NULLIF(COUNTIF(lp.is_match), 0)",
+                "  ) AS m_probability,",
+                "  SAFE_DIVIDE(",
+                f"    COUNTIF(NOT lp.is_match AND ({sql_expr})),",
+                "    NULLIF(COUNTIF(NOT lp.is_match), 0)",
+                "  ) AS u_probability,",
+                "  SAFE_DIVIDE(COUNTIF(lp.is_match), COUNT(*)) AS match_rate",
+                f"FROM `{params.labeled_pairs_table}` lp",
+                f"INNER JOIN `{params.source_table}` l "
+                "ON lp.l_entity_uid = l.entity_uid",
+                f"INNER JOIN `{params.source_table}` r "
+                "ON lp.r_entity_uid = r.entity_uid",
+            ]
+            parts.append("\n".join(part_lines))
+
+    if not parts:
+        return SQLExpression.from_raw(
+            "SELECT CAST(NULL AS STRING) AS comparison_name WHERE FALSE"
+        )
+
+    return SQLExpression.from_raw("\nUNION ALL\n".join(parts))
+
+
 def build_em_estep_sql() -> SQLExpression:
     """Build just the E-step SQL for local (DuckDB) execution.
 

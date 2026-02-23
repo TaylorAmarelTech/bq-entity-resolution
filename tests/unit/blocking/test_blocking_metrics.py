@@ -1,10 +1,10 @@
 """Tests for blocking evaluation metrics."""
 
-import pytest
-
-from bq_entity_resolution.blocking.engine import BlockingEngine
 from bq_entity_resolution.config.schema import BlockingMetricsConfig
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.blocking import (
+    BlockingMetricsParams,
+    build_blocking_metrics_sql,
+)
 
 
 def test_blocking_metrics_config_defaults():
@@ -14,48 +14,56 @@ def test_blocking_metrics_config_defaults():
     assert not bm.persist_to_table
 
 
-def test_blocking_metrics_sql_generates(sample_config):
+def test_blocking_metrics_sql_generates():
     """Blocking metrics SQL renders successfully."""
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    sql = engine.generate_metrics_sql(tier)
+    params = BlockingMetricsParams(
+        candidates_table="proj.silver.candidates_exact",
+        matches_table="proj.silver.matches_exact",
+        source_table="proj.silver.featured",
+        tier_name="exact",
+    )
+    sql = build_blocking_metrics_sql(params).render()
     assert "candidate_pairs" in sql
     assert "matched_pairs" in sql
     assert "precision" in sql
     assert "reduction_ratio" in sql
-    assert tier.name in sql
+    assert "exact" in sql
 
 
-def test_blocking_metrics_references_correct_tables(sample_config):
+def test_blocking_metrics_references_correct_tables():
     """Blocking metrics SQL references candidates and matches tables."""
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[1]  # fuzzy
+    params = BlockingMetricsParams(
+        candidates_table="proj.silver.candidates_fuzzy",
+        matches_table="proj.silver.matches_fuzzy",
+        source_table="proj.silver.featured",
+        tier_name="fuzzy",
+    )
+    sql = build_blocking_metrics_sql(params).render()
+    assert "candidates_fuzzy" in sql
+    assert "matches_fuzzy" in sql
 
-    sql = engine.generate_metrics_sql(tier)
-    assert f"candidates_{tier.name}" in sql
-    assert f"matches_{tier.name}" in sql
 
-
-def test_blocking_metrics_includes_tier_name(sample_config):
+def test_blocking_metrics_includes_tier_name():
     """Metrics output includes the tier name."""
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
+    params = BlockingMetricsParams(
+        candidates_table="proj.silver.candidates_exact",
+        matches_table="proj.silver.matches_exact",
+        source_table="proj.silver.featured",
+        tier_name="exact",
+    )
+    sql = build_blocking_metrics_sql(params).render()
+    assert "'exact'" in sql
 
-    sql = engine.generate_metrics_sql(tier)
-    assert f"'{tier.name}'" in sql
 
-
-def test_blocking_metrics_includes_timestamp(sample_config):
+def test_blocking_metrics_includes_timestamp():
     """Metrics output includes a computed_at timestamp."""
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    sql = engine.generate_metrics_sql(tier)
+    params = BlockingMetricsParams(
+        candidates_table="proj.silver.candidates_exact",
+        matches_table="proj.silver.matches_exact",
+        source_table="proj.silver.featured",
+        tier_name="exact",
+    )
+    sql = build_blocking_metrics_sql(params).render()
     assert "computed_at" in sql
 
 

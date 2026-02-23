@@ -127,8 +127,8 @@ def test_term_frequencies_single_column():
     sql = expr.render()
 
     assert "CREATE OR REPLACE TABLE" in sql
-    assert "'last_name' AS tf_col" in sql
-    assert "tf_frequency" in sql
+    assert "'last_name' AS term_frequency_column" in sql
+    assert "term_frequency_ratio" in sql
     assert "COUNT(*)" in sql
 
 
@@ -142,8 +142,8 @@ def test_term_frequencies_multiple_columns():
     sql = expr.render()
 
     assert "UNION ALL" in sql
-    assert "'last_name' AS tf_col" in sql
-    assert "'city' AS tf_col" in sql
+    assert "'last_name' AS term_frequency_column" in sql
+    assert "'city' AS term_frequency_column" in sql
 
 
 def test_features_returns_sql_expression():

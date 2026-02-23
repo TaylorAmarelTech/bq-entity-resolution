@@ -8,7 +8,6 @@ from bq_entity_resolution.matching.parameters import (
     ParameterEstimator,
     TierParameters,
 )
-from bq_entity_resolution.matching.engine import MatchingEngine
 
 
 def test_level_parameters_log_weight():
@@ -18,7 +17,7 @@ def test_level_parameters_log_weight():
 
 
 def test_level_parameters_equal_mu():
-    """Equal m and u → log weight = 0 (uninformative)."""
+    """Equal m and u -> log weight = 0 (uninformative)."""
     lp = LevelParameters(label="test", m=0.5, u=0.5)
     assert abs(lp.log_weight) < 0.001
 
@@ -36,7 +35,7 @@ def test_tier_parameters_log_prior_odds():
     assert abs(tp.log_prior_odds) < 0.001  # 50/50 = log2(1) = 0
 
     tp2 = TierParameters(tier_name="test", prior_match_prob=0.1)
-    assert tp2.log_prior_odds < 0  # 10% prior → negative
+    assert tp2.log_prior_odds < 0  # 10% prior -> negative
 
 
 def test_tier_parameters_clamped_prior():
@@ -50,9 +49,7 @@ def test_tier_parameters_clamped_prior():
 
 def test_parse_estimation_results(sample_config):
     """Parse BigQuery result rows into TierParameters."""
-    from bq_entity_resolution.sql.generator import SQLGenerator
-
-    estimator = ParameterEstimator(sample_config, SQLGenerator())
+    estimator = ParameterEstimator(sample_config)
     tier = sample_config.matching_tiers[0]
 
     rows = [
@@ -80,9 +77,7 @@ def test_parse_estimation_results(sample_config):
 
 def test_extract_manual_params(sample_config):
     """Extract manual params for tiers without training."""
-    from bq_entity_resolution.sql.generator import SQLGenerator
-
-    estimator = ParameterEstimator(sample_config, SQLGenerator())
+    estimator = ParameterEstimator(sample_config)
     tier = sample_config.matching_tiers[0]
 
     params = estimator.extract_manual_params(tier)
@@ -92,46 +87,3 @@ def test_extract_manual_params(sample_config):
         assert len(cp.levels) == 2
         assert cp.levels[0]["label"] == "match"
         assert cp.levels[1]["label"] == "else"
-
-
-def test_engine_log_weight():
-    """Test the static _log_weight method."""
-    w = MatchingEngine._log_weight(0.9, 0.1)
-    assert abs(w - math.log2(9.0)) < 0.001
-
-
-def test_engine_log_weight_clamping():
-    """Extreme values are clamped."""
-    w = MatchingEngine._log_weight(0.0, 1.0)
-    assert math.isfinite(w)
-    w2 = MatchingEngine._log_weight(1.0, 0.0)
-    assert math.isfinite(w2)
-
-
-def test_engine_get_mu_defaults():
-    """Default m/u values for common labels."""
-    m, u = MatchingEngine._get_mu("exact", None, None, "test", {})
-    assert m == 0.9
-    assert u == 0.1
-
-    m, u = MatchingEngine._get_mu("else", None, None, "test", {})
-    assert m == 0.1
-    assert u == 0.9
-
-
-def test_engine_get_mu_config_precedence():
-    """Config m/u takes precedence over estimation."""
-    m, u = MatchingEngine._get_mu("exact", 0.99, 0.01, "test", {
-        "test": {"exact": {"m": 0.8, "u": 0.2}}
-    })
-    assert m == 0.99
-    assert u == 0.01
-
-
-def test_engine_get_mu_estimation():
-    """Estimation results used when config m/u is None."""
-    m, u = MatchingEngine._get_mu("exact", None, None, "test", {
-        "test": {"exact": {"m": 0.85, "u": 0.15}}
-    })
-    assert m == 0.85
-    assert u == 0.15

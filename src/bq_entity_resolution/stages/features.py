@@ -145,7 +145,23 @@ class FeatureEngineeringStage(Stage):
         # Composite keys
         composite_keys = []
         for ck in fc.composite_keys:
-            composite_keys.append(FeatureExpr(ck.name, ck.expression))
+            # Support both pre-computed expression and function+inputs
+            ck_expr = getattr(ck, "expression", None)
+            if not ck_expr:
+                func = FEATURE_FUNCTIONS.get(getattr(ck, "function", ""))
+                if func is None:
+                    continue
+                ck_inputs = ck.inputs if isinstance(ck.inputs, list) else [ck.inputs]
+                try:
+                    ck_expr = func(ck_inputs)
+                except Exception:
+                    continue
+            composite_keys.append(FeatureExpr(ck.name, ck_expr))
+
+        # Clustering from ScaleConfig
+        cluster_by = getattr(
+            getattr(config, "scale", None), "featured_table_clustering", []
+        ) or []
 
         params = FeatureParams(
             target_table=target,
@@ -155,6 +171,7 @@ class FeatureEngineeringStage(Stage):
             dependent_features=pass2,
             blocking_keys=blocking_keys,
             composite_keys=composite_keys,
+            cluster_by=list(cluster_by),
         )
 
         return [build_features_sql(params)]
@@ -169,6 +186,20 @@ class FeatureEngineeringStage(Stage):
                         f"Unknown feature function: '{feat.function}' "
                         f"for feature '{feat.name}'"
                     )
+
+        # Schema alignment: all sources must define the same column set
+        if len(self._config.sources) >= 2:
+            ref = self._config.sources[0]
+            ref_names = {c.name for c in ref.columns}
+            for source in self._config.sources[1:]:
+                src_names = {c.name for c in source.columns}
+                diff = ref_names.symmetric_difference(src_names)
+                if diff:
+                    errors.append(
+                        f"Source '{source.name}' columns differ from "
+                        f"'{ref.name}': {sorted(diff)}"
+                    )
+
         return errors
 
 

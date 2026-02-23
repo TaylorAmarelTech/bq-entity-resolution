@@ -1,13 +1,11 @@
 """Tests for active learning engine."""
 
 from bq_entity_resolution.matching.active_learning import ActiveLearningEngine
-from bq_entity_resolution.sql.generator import SQLGenerator
 
 
 def test_review_queue_sql_sum_based(sample_config):
     """Review queue SQL generates for sum-based tiers."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.active_learning.enabled = True
@@ -23,8 +21,7 @@ def test_review_queue_sql_sum_based(sample_config):
 
 def test_review_queue_sql_fellegi_sunter(sample_config):
     """Review queue SQL generates differently for F-S tiers."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.threshold.method = "fellegi_sunter"
@@ -42,8 +39,7 @@ def test_review_queue_sql_fellegi_sunter(sample_config):
 
 def test_review_queue_custom_table(sample_config):
     """Custom review queue table name is used."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.active_learning.enabled = True

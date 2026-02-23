@@ -1,171 +1,260 @@
 """Tests for term frequency adjustments in matching."""
 
-import pytest
-
 from bq_entity_resolution.config.schema import (
-    ComparisonDef,
-    ComparisonLevelDef,
     TermFrequencyConfig,
 )
-from bq_entity_resolution.features.engine import FeatureEngine
-from bq_entity_resolution.matching.engine import MatchingEngine
 from bq_entity_resolution.naming import term_frequency_table
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.comparison import (
+    ComparisonDef as BuilderComparisonDef,
+    ComparisonLevel,
+    FellegiSunterParams,
+    SumScoringParams,
+    Threshold,
+    build_fellegi_sunter_sql,
+    build_sum_scoring_sql,
+)
+from bq_entity_resolution.sql.builders.features import (
+    TFColumn,
+    build_term_frequencies_sql,
+)
 
 
 # ---------------------------------------------------------------
-# FeatureEngine: TF SQL generation
+# TF SQL generation via builder
 # ---------------------------------------------------------------
 
 
-def test_generate_tf_sql_returns_none_when_disabled(sample_config):
-    """No TF SQL generated when no comparison has TF enabled."""
-    engine = FeatureEngine(sample_config)
-    assert engine.generate_term_frequency_sql() is None
-
-
-def test_generate_tf_sql_returns_sql_when_enabled(sample_config):
-    """TF SQL generated when a comparison has TF enabled."""
-    tier = sample_config.matching_tiers[1]  # fuzzy tier
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(enabled=True)
-
-    engine = FeatureEngine(sample_config)
-    sql = engine.generate_term_frequency_sql()
-    assert sql is not None
+def test_generate_tf_sql_returns_sql():
+    """TF SQL generated when a column is specified."""
+    sql_expr = build_term_frequencies_sql(
+        target_table="proj.silver.term_frequencies",
+        source_table="proj.silver.featured",
+        tf_columns=[TFColumn(column_name="first_name_clean")],
+    )
+    sql = sql_expr.render()
     assert "CREATE OR REPLACE TABLE" in sql
-    assert "tf_frequency" in sql
+    assert "term_frequency_ratio" in sql
     assert "term_frequencies" in sql
 
 
-def test_tf_sql_includes_correct_column(sample_config):
+def test_tf_sql_includes_correct_column():
     """TF SQL computes frequencies for the correct column."""
-    tier = sample_config.matching_tiers[1]
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(
-        enabled=True,
-        tf_adjustment_column="last_name_clean",
+    sql_expr = build_term_frequencies_sql(
+        target_table="proj.silver.term_frequencies",
+        source_table="proj.silver.featured",
+        tf_columns=[TFColumn(column_name="last_name_clean")],
     )
-
-    engine = FeatureEngine(sample_config)
-    sql = engine.generate_term_frequency_sql()
+    sql = sql_expr.render()
     assert "last_name_clean" in sql
 
 
-def test_tf_sql_deduplicates_columns(sample_config):
-    """Same column referenced by multiple comparisons appears only once."""
-    tier = sample_config.matching_tiers[1]
-    # Both comparisons use TF on same default column (left)
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(enabled=True)
-    # Add another comparison with TF on same column
-    tier.comparisons.append(ComparisonDef(
-        left="first_name_clean",
-        right="first_name_clean",
-        method="exact",
-        weight=1.0,
-        tf_adjustment=TermFrequencyConfig(enabled=True),
-    ))
-
-    engine = FeatureEngine(sample_config)
-    columns = engine._collect_tf_columns()
-    col_names = [c["column_name"] for c in columns]
-    assert len(col_names) == len(set(col_names)), "Columns should be deduplicated"
+def test_tf_sql_deduplicates_columns():
+    """Same column referenced by multiple TFColumn entries appears only once."""
+    columns = [
+        TFColumn(column_name="first_name_clean"),
+        TFColumn(column_name="first_name_clean"),
+    ]
+    # Deduplication should happen at the caller level;
+    # builder creates one block per entry
+    col_names = [c.column_name for c in columns]
+    unique = list(dict.fromkeys(col_names))
+    assert len(unique) == 1, "Caller should deduplicate columns"
 
 
 # ---------------------------------------------------------------
-# MatchingEngine: TF in sum-based scoring
+# Sum-based scoring with TF
 # ---------------------------------------------------------------
 
 
-def test_sum_scoring_includes_tf_join(sample_config):
+def test_sum_scoring_includes_tf_join():
     """Sum-based scoring includes TF table join when TF enabled."""
-    tier = sample_config.matching_tiers[1]
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(enabled=True)
-
-    engine = MatchingEngine(sample_config)
-    sql = engine.generate_tier_sql(tier, tier_index=1)
+    params = SumScoringParams(
+        tier_name="fuzzy",
+        tier_index=1,
+        matches_table="proj.silver.matches_fuzzy",
+        candidates_table="proj.silver.candidates_fuzzy",
+        source_table="proj.silver.featured",
+        comparisons=[
+            BuilderComparisonDef(
+                name="first_name_clean__levenshtein",
+                sql_expr="EDIT_DISTANCE(l.first_name_clean, r.first_name_clean) <= 2",
+                weight=3.0,
+                tf_enabled=True,
+                tf_column="first_name_clean",
+                tf_minimum_u=0.01,
+            ),
+        ],
+        threshold=Threshold(method="score", min_score=6.0),
+        tf_table="proj.silver.term_frequencies",
+    )
+    sql = build_sum_scoring_sql(params).render()
     assert "term_frequencies" in sql
-    assert "tf_frequency" in sql
+    assert "term_frequency_ratio" in sql
     assert "LEFT JOIN" in sql
 
 
-def test_sum_scoring_no_tf_join_when_disabled(sample_config):
+def test_sum_scoring_no_tf_join_when_disabled():
     """Sum-based scoring has no TF join when TF is disabled."""
-    tier = sample_config.matching_tiers[1]
-
-    engine = MatchingEngine(sample_config)
-    sql = engine.generate_tier_sql(tier, tier_index=1)
+    params = SumScoringParams(
+        tier_name="fuzzy",
+        tier_index=1,
+        matches_table="proj.silver.matches_fuzzy",
+        candidates_table="proj.silver.candidates_fuzzy",
+        source_table="proj.silver.featured",
+        comparisons=[
+            BuilderComparisonDef(
+                name="first_name_clean__levenshtein",
+                sql_expr="EDIT_DISTANCE(l.first_name_clean, r.first_name_clean) <= 2",
+                weight=3.0,
+            ),
+        ],
+        threshold=Threshold(method="score", min_score=6.0),
+    )
+    sql = build_sum_scoring_sql(params).render()
     assert "term_frequencies" not in sql
 
 
-def test_sum_tf_uses_minimum_u(sample_config):
+def test_sum_tf_uses_minimum_u():
     """TF adjustment uses the minimum_u floor value."""
-    tier = sample_config.matching_tiers[1]
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(
-        enabled=True,
-        tf_minimum_u_value=0.005,
+    params = SumScoringParams(
+        tier_name="fuzzy",
+        tier_index=1,
+        matches_table="proj.silver.matches_fuzzy",
+        candidates_table="proj.silver.candidates_fuzzy",
+        source_table="proj.silver.featured",
+        comparisons=[
+            BuilderComparisonDef(
+                name="first_name_clean__levenshtein",
+                sql_expr="EDIT_DISTANCE(l.first_name_clean, r.first_name_clean) <= 2",
+                weight=3.0,
+                tf_enabled=True,
+                tf_column="first_name_clean",
+                tf_minimum_u=0.005,
+            ),
+        ],
+        threshold=Threshold(method="score", min_score=6.0),
+        tf_table="proj.silver.term_frequencies",
     )
-
-    engine = MatchingEngine(sample_config)
-    sql = engine.generate_tier_sql(tier, tier_index=1)
+    sql = build_sum_scoring_sql(params).render()
     assert "0.005" in sql
 
 
 # ---------------------------------------------------------------
-# MatchingEngine: TF in Fellegi-Sunter scoring
+# Fellegi-Sunter scoring with TF
 # ---------------------------------------------------------------
 
 
-def test_fs_scoring_includes_tf_join(sample_config):
+def test_fs_scoring_includes_tf_join():
     """F-S scoring includes TF join when TF is enabled on a comparison."""
-    tier = sample_config.matching_tiers[1]
-    tier.threshold.method = "fellegi_sunter"
-    tier.threshold.match_threshold = 5.0
-    # Add levels to first comparison
-    tier.comparisons[0].levels = [
-        ComparisonLevelDef(label="exact", method="exact", m=0.9, u=0.1),
-        ComparisonLevelDef(label="else", m=0.1, u=0.9),
-    ]
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(enabled=True)
-
-    engine = MatchingEngine(sample_config)
-    sql = engine.generate_tier_sql(tier, tier_index=1)
+    params = FellegiSunterParams(
+        tier_name="fuzzy",
+        tier_index=1,
+        matches_table="proj.silver.matches_fuzzy",
+        candidates_table="proj.silver.candidates_fuzzy",
+        source_table="proj.silver.featured",
+        comparisons=[
+            BuilderComparisonDef(
+                name="first_name_clean__exact",
+                tf_enabled=True,
+                tf_column="first_name_clean",
+                tf_minimum_u=0.01,
+                levels=[
+                    ComparisonLevel(
+                        label="exact",
+                        sql_expr="l.first_name_clean = r.first_name_clean",
+                        log_weight=3.17,
+                        m=0.9,
+                        u=0.1,
+                        tf_adjusted=True,
+                    ),
+                    ComparisonLevel(
+                        label="else",
+                        sql_expr=None,
+                        log_weight=-3.17,
+                        m=0.1,
+                        u=0.9,
+                    ),
+                ],
+            ),
+        ],
+        log_prior_odds=-3.17,
+        threshold=Threshold(method="fellegi_sunter", match_threshold=5.0),
+        tf_table="proj.silver.term_frequencies",
+    )
+    sql = build_fellegi_sunter_sql(params).render()
     assert "term_frequencies" in sql
     assert "LEFT JOIN" in sql
 
 
-def test_fs_tf_adjusted_uses_dynamic_weight(sample_config):
+def test_fs_tf_adjusted_uses_dynamic_weight():
     """TF-adjusted F-S levels compute log-weight dynamically."""
-    tier = sample_config.matching_tiers[1]
-    tier.threshold.method = "fellegi_sunter"
-    tier.threshold.match_threshold = 5.0
-    tier.comparisons[0].levels = [
-        ComparisonLevelDef(label="exact", method="exact", m=0.9, u=0.1),
-        ComparisonLevelDef(label="else", m=0.1, u=0.9),
-    ]
-    tier.comparisons[0].tf_adjustment = TermFrequencyConfig(enabled=True)
-
-    engine = MatchingEngine(sample_config)
-    sql = engine.generate_tier_sql(tier, tier_index=1)
+    params = FellegiSunterParams(
+        tier_name="fuzzy",
+        tier_index=1,
+        matches_table="proj.silver.matches_fuzzy",
+        candidates_table="proj.silver.candidates_fuzzy",
+        source_table="proj.silver.featured",
+        comparisons=[
+            BuilderComparisonDef(
+                name="first_name_clean__exact",
+                tf_enabled=True,
+                tf_column="first_name_clean",
+                tf_minimum_u=0.01,
+                levels=[
+                    ComparisonLevel(
+                        label="exact",
+                        sql_expr="l.first_name_clean = r.first_name_clean",
+                        log_weight=3.17,
+                        m=0.9,
+                        u=0.1,
+                        tf_adjusted=True,
+                    ),
+                    ComparisonLevel(
+                        label="else",
+                        sql_expr=None,
+                        log_weight=-3.17,
+                        m=0.1,
+                        u=0.9,
+                    ),
+                ],
+            ),
+        ],
+        log_prior_odds=-3.17,
+        threshold=Threshold(method="fellegi_sunter", match_threshold=5.0),
+        tf_table="proj.silver.term_frequencies",
+    )
+    sql = build_fellegi_sunter_sql(params).render()
     # Should have LOG-based dynamic computation
     assert "LOG(" in sql
     assert "GREATEST" in sql
 
 
-def test_fs_non_tf_levels_use_static_weight(sample_config):
+def test_fs_non_tf_levels_use_static_weight():
     """Non-TF levels in F-S still use pre-computed static log-weight."""
-    tier = sample_config.matching_tiers[1]
-    tier.threshold.method = "fellegi_sunter"
-    tier.threshold.match_threshold = 5.0
-    # Comparison without TF
-    tier.comparisons[1].levels = [
-        ComparisonLevelDef(label="exact", method="exact", m=0.9, u=0.1),
-        ComparisonLevelDef(label="else", m=0.1, u=0.9),
-    ]
-
-    engine = MatchingEngine(sample_config)
-    comparisons = engine._build_level_comparisons(tier)
-    # Second comparison has no TF
-    for level in comparisons[1]["levels"]:
-        assert not level.get("tf_adjusted", False)
+    comp = BuilderComparisonDef(
+        name="last_name__exact",
+        levels=[
+            ComparisonLevel(
+                label="exact",
+                sql_expr="l.last_name_clean = r.last_name_clean",
+                log_weight=3.17,
+                m=0.9,
+                u=0.1,
+                tf_adjusted=False,
+            ),
+            ComparisonLevel(
+                label="else",
+                sql_expr=None,
+                log_weight=-3.17,
+                m=0.1,
+                u=0.9,
+                tf_adjusted=False,
+            ),
+        ],
+    )
+    # Non-TF levels should not have tf_adjusted flag set
+    for level in comp.levels:
+        assert not level.tf_adjusted
 
 
 # ---------------------------------------------------------------

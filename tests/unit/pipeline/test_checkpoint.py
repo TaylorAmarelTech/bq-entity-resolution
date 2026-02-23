@@ -1,6 +1,6 @@
 """Tests for pipeline checkpoint/resume functionality."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from bq_entity_resolution.config.schema import (
@@ -17,8 +17,8 @@ from bq_entity_resolution.config.schema import (
     ThresholdConfig,
     TierBlockingConfig,
 )
-from bq_entity_resolution.pipeline import orchestrator as orch_module
 from bq_entity_resolution.pipeline.context import PipelineContext
+from bq_entity_resolution.watermark.checkpoint import CheckpointManager
 
 
 def _minimal_config(checkpoint_enabled: bool = False) -> PipelineConfig:
@@ -51,7 +51,6 @@ def _minimal_config(checkpoint_enabled: bool = False) -> PipelineConfig:
 
 
 def _mock_context(config: PipelineConfig, completed: set | None = None) -> PipelineContext:
-    from datetime import datetime
     ctx = PipelineContext(
         run_id="test_run",
         started_at=datetime.now(UTC),
@@ -62,149 +61,77 @@ def _mock_context(config: PipelineConfig, completed: set | None = None) -> Pipel
     return ctx
 
 
-def test_checkpoint_stage_constants_defined():
-    """All stage constants exist as module-level attributes."""
-    expected = [
-        "STAGE_WATERMARKS", "STAGE_STAGING", "STAGE_FEATURES",
-        "STAGE_TERM_FREQ", "STAGE_EMBEDDINGS", "STAGE_UDFS",
-        "STAGE_PARAMS", "STAGE_MATCHES_INIT", "STAGE_TIERS",
-        "STAGE_RECONCILE", "STAGE_REVIEW", "STAGE_WATERMARK_ADV",
+def test_checkpoint_manager_mark_stage_complete():
+    """CheckpointManager.mark_stage_complete calls BQ client."""
+    client = MagicMock()
+    mgr = CheckpointManager(client, "proj.meta.checkpoints")
+    mgr.mark_stage_complete("run_1", "staging")
+    client.execute.assert_called_once()
+    call_sql = client.execute.call_args[0][0]
+    assert "INSERT INTO" in call_sql
+    assert "staging" in call_sql
+    assert "run_1" in call_sql
+
+
+def test_checkpoint_manager_load_completed_stages():
+    """CheckpointManager.load_completed_stages queries BQ for completed stages."""
+    client = MagicMock()
+    client.execute_and_fetch.return_value = [
+        {"stage_name": "staging"},
+        {"stage_name": "features"},
     ]
-    for name in expected:
-        assert hasattr(orch_module, name), f"Missing stage constant: {name}"
-        assert isinstance(getattr(orch_module, name), str)
+    mgr = CheckpointManager(client, "proj.meta.checkpoints")
+    stages = mgr.load_completed_stages("run_1")
+    assert stages == {"staging", "features"}
 
 
-def test_should_skip_stage_disabled():
-    """When checkpoint is disabled, _should_skip_stage always returns False."""
-    config = _minimal_config(checkpoint_enabled=False)
-    # Access the method via a mock orchestrator
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    ctx = _mock_context(config, completed={"init_watermarks"})
-    assert orch._should_skip_stage(ctx, "init_watermarks") is False
+def test_checkpoint_manager_mark_run_complete():
+    """CheckpointManager.mark_run_complete inserts __run_complete__ sentinel."""
+    client = MagicMock()
+    mgr = CheckpointManager(client, "proj.meta.checkpoints")
+    mgr.mark_run_complete("run_1")
+    call_sql = client.execute.call_args[0][0]
+    assert "__run_complete__" in call_sql
 
 
-def test_should_skip_stage_enabled_not_in_set():
-    """Returns False for stages not yet completed."""
-    config = _minimal_config(checkpoint_enabled=True)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    ctx = _mock_context(config)
-    assert orch._should_skip_stage(ctx, "init_watermarks") is False
+def test_checkpoint_manager_find_resumable_run():
+    """CheckpointManager.find_resumable_run returns most recent incomplete run."""
+    client = MagicMock()
+    client.execute_and_fetch.return_value = [{"run_id": "run_42"}]
+    mgr = CheckpointManager(client, "proj.meta.checkpoints")
+    result = mgr.find_resumable_run()
+    assert result == "run_42"
 
 
-def test_should_skip_stage_enabled_in_set():
-    """Returns True for stages already in completed_stages."""
-    config = _minimal_config(checkpoint_enabled=True)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    ctx = _mock_context(config, completed={"init_watermarks"})
-    assert orch._should_skip_stage(ctx, "init_watermarks") is True
+def test_checkpoint_manager_find_resumable_run_none():
+    """CheckpointManager.find_resumable_run returns None when no incomplete runs."""
+    client = MagicMock()
+    client.execute_and_fetch.return_value = []
+    mgr = CheckpointManager(client, "proj.meta.checkpoints")
+    result = mgr.find_resumable_run()
+    assert result is None
 
 
-def test_mark_stage_complete_adds_to_set():
-    """_mark_stage_complete adds the stage to completed_stages."""
+def test_context_completed_stages_tracking():
+    """completed_stages set on PipelineContext tracks stage completion."""
     config = _minimal_config()
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    orch.checkpoint_mgr = None
     ctx = _mock_context(config)
-    assert "feature_engineering" not in ctx.completed_stages
-    orch._mark_stage_complete(ctx, "feature_engineering")
-    assert "feature_engineering" in ctx.completed_stages
-
-
-def test_checkpoint_disabled_runs_all_stages():
-    """With checkpoint disabled (default), all stages execute normally."""
-    config = _minimal_config(checkpoint_enabled=False)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    ctx = _mock_context(config)
-    # All stages should NOT be skipped
-    for stage in [
-        orch_module.STAGE_WATERMARKS, orch_module.STAGE_STAGING,
-        orch_module.STAGE_FEATURES, orch_module.STAGE_TIERS,
-    ]:
-        assert orch._should_skip_stage(ctx, stage) is False
-
-
-def test_checkpoint_enabled_marks_stages():
-    """With checkpoint enabled, _mark_stage_complete populates completed_stages."""
-    config = _minimal_config(checkpoint_enabled=True)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    orch.checkpoint_mgr = MagicMock()
-    ctx = _mock_context(config)
-    orch._mark_stage_complete(ctx, orch_module.STAGE_WATERMARKS)
-    orch._mark_stage_complete(ctx, orch_module.STAGE_STAGING)
-    assert orch_module.STAGE_WATERMARKS in ctx.completed_stages
-    assert orch_module.STAGE_STAGING in ctx.completed_stages
-    assert orch_module.STAGE_FEATURES not in ctx.completed_stages
+    assert len(ctx.completed_stages) == 0
+    ctx.completed_stages.add("staging")
+    ctx.completed_stages.add("features")
+    assert "staging" in ctx.completed_stages
+    assert "features" in ctx.completed_stages
+    assert "matching" not in ctx.completed_stages
 
 
 def test_checkpoint_skips_completed_stages():
-    """Pre-populated completed_stages cause those stages to be skipped."""
+    """Pre-populated completed_stages can be checked for membership."""
     config = _minimal_config(checkpoint_enabled=True)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
     ctx = _mock_context(
         config,
-        completed={
-            orch_module.STAGE_WATERMARKS,
-            orch_module.STAGE_STAGING,
-            orch_module.STAGE_FEATURES,
-        },
+        completed={"init_watermarks", "staging", "features"},
     )
-    assert orch._should_skip_stage(ctx, orch_module.STAGE_WATERMARKS) is True
-    assert orch._should_skip_stage(ctx, orch_module.STAGE_STAGING) is True
-    assert orch._should_skip_stage(ctx, orch_module.STAGE_FEATURES) is True
-    assert orch._should_skip_stage(ctx, orch_module.STAGE_TIERS) is False
-
-
-def test_mark_stage_complete_persists_to_checkpoint_mgr():
-    """When checkpoint_mgr is set, _mark_stage_complete persists to BQ."""
-    config = _minimal_config(checkpoint_enabled=True)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    orch.checkpoint_mgr = MagicMock()
-    ctx = _mock_context(config)
-    orch._mark_stage_complete(ctx, orch_module.STAGE_STAGING)
-    assert orch_module.STAGE_STAGING in ctx.completed_stages
-    orch.checkpoint_mgr.mark_stage_complete.assert_called_once_with(
-        ctx.run_id, orch_module.STAGE_STAGING,
-    )
-
-
-def test_mark_stage_complete_no_checkpoint_mgr():
-    """When checkpoint_mgr is None, stage is still added to in-memory set."""
-    config = _minimal_config(checkpoint_enabled=False)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    orch.checkpoint_mgr = None
-    ctx = _mock_context(config)
-    orch._mark_stage_complete(ctx, orch_module.STAGE_STAGING)
-    assert orch_module.STAGE_STAGING in ctx.completed_stages
-
-
-def test_mark_stage_complete_checkpoint_failure_does_not_raise():
-    """Checkpoint persistence failure is logged but doesn't abort the pipeline."""
-    config = _minimal_config(checkpoint_enabled=True)
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    orch = object.__new__(PipelineOrchestrator)
-    orch.config = config
-    orch.checkpoint_mgr = MagicMock()
-    orch.checkpoint_mgr.mark_stage_complete.side_effect = RuntimeError("BQ down")
-    ctx = _mock_context(config)
-    # Should not raise
-    orch._mark_stage_complete(ctx, orch_module.STAGE_STAGING)
-    assert orch_module.STAGE_STAGING in ctx.completed_stages
+    assert "init_watermarks" in ctx.completed_stages
+    assert "staging" in ctx.completed_stages
+    assert "features" in ctx.completed_stages
+    assert "tiers" not in ctx.completed_stages

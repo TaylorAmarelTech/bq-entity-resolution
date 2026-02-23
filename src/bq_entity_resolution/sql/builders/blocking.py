@@ -13,6 +13,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bq_entity_resolution.columns import (
+    ENTITY_UID,
+    LEFT_ENTITY_UID,
+    RIGHT_ENTITY_UID,
+    BLOCKING_PATH,
+    SOURCE_NAME,
+    BLOCKING_METRIC_TIER_NAME,
+    BLOCKING_METRIC_TOTAL_RECORDS,
+    BLOCKING_METRIC_CANDIDATE_PAIRS,
+    BLOCKING_METRIC_MATCHED_PAIRS,
+    BLOCKING_METRIC_PRECISION,
+    BLOCKING_METRIC_REDUCTION_RATIO,
+    BLOCKING_METRIC_COMPUTED_AT,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -102,9 +116,9 @@ def _build_path_cte(
     lines = [
         f"{cte_name} AS (",
         f"  SELECT",
-        f"    l.entity_uid AS l_entity_uid,",
-        f"    r.entity_uid AS r_entity_uid,",
-        f"    '{path_label}' AS blocking_path",
+        f"    l.{ENTITY_UID} AS {LEFT_ENTITY_UID},",
+        f"    r.{ENTITY_UID} AS {RIGHT_ENTITY_UID},",
+        f"    '{path_label}' AS {BLOCKING_PATH}",
         f"  FROM {left_source} l",
         f"  INNER JOIN {right_source} r",
         f"    ON {on_clause}",
@@ -141,9 +155,9 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
         parts.append("source_with_lsh AS (")
         parts.append("  SELECT")
         parts.append("    s.*,")
-        parts.append("    lsh.* EXCEPT(entity_uid)")
+        parts.append(f"    lsh.* EXCEPT({ENTITY_UID})")
         parts.append(f"  FROM `{params.source_table}` s")
-        parts.append(f"  LEFT JOIN `{params.lsh_table}` lsh USING (entity_uid)")
+        parts.append(f"  LEFT JOIN `{params.lsh_table}` lsh USING ({ENTITY_UID})")
         parts.append("),")
 
     # LSH pre-join for canonical (cross-batch only)
@@ -151,9 +165,9 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
         parts.append("canonical_with_lsh AS (")
         parts.append("  SELECT")
         parts.append("    c.*,")
-        parts.append("    lsh.* EXCEPT(entity_uid)")
+        parts.append(f"    lsh.* EXCEPT({ENTITY_UID})")
         parts.append(f"  FROM `{params.canonical_table}` c")
-        parts.append(f"  LEFT JOIN `{params.lsh_table}` lsh USING (entity_uid)")
+        parts.append(f"  LEFT JOIN `{params.lsh_table}` lsh USING ({ENTITY_UID})")
         parts.append("),")
 
     # Intra-batch path CTEs
@@ -188,22 +202,22 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
     union_parts: list[str] = []
     for path in params.blocking_paths:
         union_parts.append(
-            f"  SELECT l_entity_uid, r_entity_uid, blocking_path "
+            f"  SELECT {LEFT_ENTITY_UID}, {RIGHT_ENTITY_UID}, {BLOCKING_PATH} "
             f"FROM intra_path_{path.index}"
         )
     if params.cross_batch and params.canonical_table:
         for path in params.blocking_paths:
             union_parts.append(
-                f"  SELECT l_entity_uid, r_entity_uid, blocking_path "
+                f"  SELECT {LEFT_ENTITY_UID}, {RIGHT_ENTITY_UID}, {BLOCKING_PATH} "
                 f"FROM cross_path_{path.index}"
             )
 
     if not union_parts:
         # Safety: no paths
         parts.append(
-            "  SELECT CAST(NULL AS STRING) AS l_entity_uid, "
-            "CAST(NULL AS STRING) AS r_entity_uid, "
-            "CAST(NULL AS STRING) AS blocking_path WHERE FALSE"
+            f"  SELECT CAST(NULL AS INT64) AS {LEFT_ENTITY_UID}, "
+            f"CAST(NULL AS INT64) AS {RIGHT_ENTITY_UID}, "
+            f"CAST(NULL AS STRING) AS {BLOCKING_PATH} WHERE FALSE"
         )
     else:
         parts.append("\n  UNION ALL\n".join(union_parts))
@@ -213,25 +227,65 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
     # Deduplicate
     parts.append("deduplicated AS (")
     parts.append("  SELECT DISTINCT")
-    parts.append("    l_entity_uid,")
-    parts.append("    r_entity_uid")
+    parts.append(f"    {LEFT_ENTITY_UID},")
+    parts.append(f"    {RIGHT_ENTITY_UID}")
     parts.append("  FROM all_candidates")
-    parts.append("  WHERE l_entity_uid IS NOT NULL")
+    parts.append(f"  WHERE {LEFT_ENTITY_UID} IS NOT NULL")
     parts.append(")")
     parts.append("")
 
     # Final select with optional exclusion
-    parts.append("SELECT d.l_entity_uid, d.r_entity_uid")
+    parts.append(f"SELECT d.{LEFT_ENTITY_UID}, d.{RIGHT_ENTITY_UID}")
     parts.append("FROM deduplicated d")
 
     if params.excluded_pairs_table:
         parts.append(f"LEFT JOIN `{params.excluded_pairs_table}` e")
         parts.append(
-            "  ON (d.l_entity_uid = e.l_entity_uid AND d.r_entity_uid = e.r_entity_uid)"
+            f"  ON (d.{LEFT_ENTITY_UID} = e.{LEFT_ENTITY_UID} AND d.{RIGHT_ENTITY_UID} = e.{RIGHT_ENTITY_UID})"
         )
         parts.append(
-            "  OR (d.l_entity_uid = e.r_entity_uid AND d.r_entity_uid = e.l_entity_uid)"
+            f"  OR (d.{LEFT_ENTITY_UID} = e.{RIGHT_ENTITY_UID} AND d.{RIGHT_ENTITY_UID} = e.{LEFT_ENTITY_UID})"
         )
-        parts.append("WHERE e.l_entity_uid IS NULL")
+        parts.append(f"WHERE e.{LEFT_ENTITY_UID} IS NULL")
 
     return SQLExpression.from_raw("\n".join(parts))
+
+
+# ---------------------------------------------------------------------------
+# Blocking metrics
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BlockingMetricsParams:
+    """Parameters for blocking evaluation metrics."""
+    candidates_table: str
+    matches_table: str
+    source_table: str
+    tier_name: str
+
+
+def build_blocking_metrics_sql(params: BlockingMetricsParams) -> SQLExpression:
+    """Build SQL to compute blocking evaluation metrics.
+
+    Measures how well blocking reduces the comparison space
+    while retaining true matches.
+    """
+    sql = (
+        f"SELECT\n"
+        f"  '{params.tier_name}' AS {BLOCKING_METRIC_TIER_NAME},\n"
+        f"  (SELECT COUNT(*) FROM `{params.source_table}`) AS {BLOCKING_METRIC_TOTAL_RECORDS},\n"
+        f"  (SELECT COUNT(*) FROM `{params.candidates_table}`) AS {BLOCKING_METRIC_CANDIDATE_PAIRS},\n"
+        f"  (SELECT COUNT(*) FROM `{params.matches_table}`) AS {BLOCKING_METRIC_MATCHED_PAIRS},\n"
+        f"  SAFE_DIVIDE(\n"
+        f"    (SELECT COUNT(*) FROM `{params.matches_table}`),\n"
+        f"    (SELECT COUNT(*) FROM `{params.candidates_table}`)\n"
+        f"  ) AS {BLOCKING_METRIC_PRECISION},\n"
+        f"  SAFE_DIVIDE(\n"
+        f"    (SELECT COUNT(*) FROM `{params.candidates_table}`),\n"
+        f"    (SELECT COUNT(*) FROM `{params.source_table}`) "
+        f"* ((SELECT COUNT(*) FROM `{params.source_table}`) - 1) / 2\n"
+        f"  ) AS {BLOCKING_METRIC_REDUCTION_RATIO},\n"
+        f"  CURRENT_TIMESTAMP() AS {BLOCKING_METRIC_COMPUTED_AT}"
+    )
+    return SQLExpression.from_raw(sql)

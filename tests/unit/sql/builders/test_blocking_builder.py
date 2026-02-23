@@ -134,7 +134,7 @@ def test_blocking_excluded_pairs():
 
     assert "LEFT JOIN" in sql
     assert "proj.ds.matches_t1" in sql
-    assert "e.l_entity_uid IS NULL" in sql
+    assert "e.left_entity_uid IS NULL" in sql
 
 
 def test_blocking_with_lsh():

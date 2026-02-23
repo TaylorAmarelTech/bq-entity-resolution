@@ -41,12 +41,12 @@ def test_sum_scoring_basic():
     assert "CREATE OR REPLACE TABLE" in sql
     assert "WITH scored AS" in sql
     assert "l.name_clean = r.name_clean" in sql
-    assert "score_name" in sql
-    assert "score_dob" in sql
-    assert "total_score" in sql
-    assert "tier_priority" in sql
+    assert "match_score_name" in sql
+    assert "match_score_dob" in sql
+    assert "match_total_score" in sql
+    assert "match_tier_priority" in sql
     assert "'exact'" in sql
-    assert "WHERE total_score >= 2.0" in sql
+    assert "WHERE match_total_score >= 2.0" in sql
 
 
 def test_sum_scoring_hard_negative_disqualify():
@@ -164,7 +164,7 @@ def test_sum_scoring_tf_adjusted():
     assert "LEFT JOIN" in sql
     assert "tf_last" in sql
     assert "LOG(" in sql
-    assert "tf_frequency" in sql
+    assert "term_frequency_ratio" in sql
 
 
 def test_sum_scoring_audit_trail():
@@ -228,8 +228,8 @@ def test_fs_scoring_basic():
     assert "total_score" in sql
     assert "-3.0" in sql
     assert "match_confidence" in sql
-    assert "POW(2.0, total_score)" in sql
-    assert "WHERE total_score >= 2.0" in sql
+    assert "POW(2.0, match_total_score)" in sql
+    assert "WHERE match_total_score >= 2.0" in sql
 
 
 def test_fs_scoring_overflow_clamp():
@@ -254,8 +254,8 @@ def test_fs_scoring_overflow_clamp():
     expr = build_fellegi_sunter_sql(params)
     sql = expr.render()
 
-    assert "WHEN total_score > 50 THEN 1.0" in sql
-    assert "WHEN total_score < -50 THEN 0.0" in sql
+    assert "WHEN match_total_score > 50 THEN 1.0" in sql
+    assert "WHEN match_total_score < -50 THEN 0.0" in sql
 
 
 def test_fs_scoring_null_coalesce():
@@ -318,7 +318,7 @@ def test_fs_scoring_tf_adjusted():
     sql = expr.render()
 
     assert "LOG(0.95) / LOG(2)" in sql
-    assert "tf_last.tf_frequency" in sql
+    assert "tf_last.term_frequency_ratio" in sql
     assert "LEFT JOIN" in sql
 
 
@@ -341,5 +341,5 @@ def test_fs_scoring_uses_match_threshold():
     expr = build_fellegi_sunter_sql(params)
     sql = expr.render()
 
-    assert "WHERE total_score >= 5.0" in sql
-    assert "WHERE total_score >= 2.0" not in sql
+    assert "WHERE match_total_score >= 5.0" in sql
+    assert "WHERE match_total_score >= 2.0" not in sql

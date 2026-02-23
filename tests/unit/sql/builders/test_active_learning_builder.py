@@ -39,7 +39,7 @@ def test_active_learning_sum_scoring():
     expr = build_active_learning_sql(params)
     sql = expr.render()
 
-    assert "ABS(total_score - 3.5)" in sql
+    assert "ABS(match_total_score - 3.5)" in sql
     assert "LIMIT 100" in sql
 
 

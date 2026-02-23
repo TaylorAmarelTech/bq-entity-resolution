@@ -556,6 +556,8 @@ class DuckDBBackend:
         sql = re.sub(r'\bARRAY_LENGTH\(', 'len(', sql)
         # REGEXP_CONTAINS → regexp_matches
         sql = re.sub(r'\bREGEXP_CONTAINS\(', 'regexp_matches(', sql)
+        # Strip CLUSTER BY clause (DuckDB doesn't support it)
+        sql = re.sub(r'\bCLUSTER\s+BY\s+[^\n]+', '', sql)
         # BQ type names → DuckDB equivalents
         sql = re.sub(r'\bAS\s+FLOAT64\b', 'AS DOUBLE', sql)
         sql = re.sub(r'\bAS\s+INT64\b', 'AS BIGINT', sql)

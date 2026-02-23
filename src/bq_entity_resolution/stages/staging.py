@@ -77,6 +77,15 @@ class StagingStage(Stage):
             for j in getattr(source, "joins", [])
         ]
 
+        # Clustering from ScaleConfig
+        cluster_by = list(
+            getattr(
+                getattr(self._config, "scale", None),
+                "staging_clustering",
+                ["entity_uid"],
+            ) or []
+        )
+
         params = StagingParams(
             target_table=target,
             source_name=source.name,
@@ -94,6 +103,7 @@ class StagingStage(Stage):
             full_refresh=full_refresh,
             partition_column=getattr(source, "partition_column", None),
             batch_size=getattr(source, "batch_size", None),
+            cluster_by=cluster_by,
         )
 
         return [build_staging_sql(params)]

@@ -15,8 +15,8 @@ def backend():
         CREATE TABLE featured (
             entity_uid VARCHAR NOT NULL,
             source_name VARCHAR NOT NULL,
-            _source_updated_at TIMESTAMP,
-            _pipeline_loaded_at TIMESTAMP,
+            source_updated_at TIMESTAMP,
+            pipeline_loaded_at TIMESTAMP,
             first_name VARCHAR,
             last_name VARCHAR,
             dob VARCHAR,

@@ -1,4 +1,4 @@
-"""Tests for canonical index table guard in orchestrator."""
+"""Tests for canonical index table support."""
 
 from bq_entity_resolution.config.schema import (
     BlockingPathDef,
@@ -14,6 +14,12 @@ from bq_entity_resolution.config.schema import (
     TierBlockingConfig,
 )
 from bq_entity_resolution.naming import canonical_index_table
+from bq_entity_resolution.sql.builders.clustering import (
+    IncrementalClusteringParams,
+    PopulateCanonicalIndexParams,
+    build_incremental_cluster_sql,
+    build_populate_canonical_index_sql,
+)
 
 
 def _minimal_config(cross_batch: bool = False) -> PipelineConfig:
@@ -52,16 +58,28 @@ def test_canonical_index_table_naming():
     assert "canonical_index" in result
 
 
-def test_canonical_table_accessible_via_reconciliation_engine():
-    """ReconciliationEngine provides canonical_index_table DDL."""
-    from bq_entity_resolution.reconciliation.engine import ReconciliationEngine
-    assert hasattr(ReconciliationEngine, "generate_create_canonical_index_sql")
+def test_incremental_cluster_builder_exists():
+    """Incremental clustering builder generates SQL referencing canonical table."""
+    params = IncrementalClusteringParams(
+        all_matches_table="proj.silver.all_matched_pairs",
+        cluster_table="proj.silver.entity_clusters",
+        source_table="proj.silver.featured",
+        canonical_table="proj.gold.canonical_index",
+    )
+    sql = build_incremental_cluster_sql(params).render()
+    assert "canonical_index" in sql
 
 
-def test_init_matches_table_method_exists():
-    """_init_matches_table method exists on PipelineOrchestrator."""
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
-    assert hasattr(PipelineOrchestrator, "_init_matches_table")
+def test_populate_canonical_index_builder_exists():
+    """Populate canonical index builder generates SQL to upsert entities."""
+    params = PopulateCanonicalIndexParams(
+        canonical_table="proj.gold.canonical_index",
+        source_table="proj.silver.featured",
+        cluster_table="proj.silver.entity_clusters",
+    )
+    sql = build_populate_canonical_index_sql(params).render()
+    assert "canonical_index" in sql
+    assert "INSERT INTO" in sql
 
 
 def test_cross_batch_config_accepted():

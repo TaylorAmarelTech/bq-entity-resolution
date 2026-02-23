@@ -9,6 +9,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from bq_entity_resolution.columns import (
+    HUMAN_LABEL,
+    INGESTED_AT,
+    IS_MATCH,
+    LABEL_SOURCE,
+    LEFT_ENTITY_UID,
+    MATCH_CONFIDENCE,
+    MATCH_TIER_NAME,
+    MATCH_TOTAL_SCORE,
+    MATCH_UNCERTAINTY,
+    QUEUED_AT,
+    RIGHT_ENTITY_UID,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -35,46 +48,115 @@ def build_active_learning_sql(params: ActiveLearningParams) -> SQLExpression:
 
     if params.is_fellegi_sunter:
         lines.append("SELECT")
-        lines.append("  l_entity_uid,")
-        lines.append("  r_entity_uid,")
-        lines.append("  total_score,")
-        lines.append("  match_confidence,")
-        lines.append("  ABS(match_confidence - 0.5) AS uncertainty,")
-        lines.append("  CAST(NULL AS BOOL) AS human_label,")
-        lines.append("  CURRENT_TIMESTAMP() AS queued_at")
+        lines.append(f"  {LEFT_ENTITY_UID},")
+        lines.append(f"  {RIGHT_ENTITY_UID},")
+        lines.append(f"  {MATCH_TOTAL_SCORE},")
+        lines.append(f"  {MATCH_CONFIDENCE},")
+        lines.append(f"  ABS({MATCH_CONFIDENCE} - 0.5) AS {MATCH_UNCERTAINTY},")
+        lines.append(f"  CAST(NULL AS BOOL) AS {HUMAN_LABEL},")
+        lines.append(f"  CURRENT_TIMESTAMP() AS {QUEUED_AT}")
         lines.append(f"FROM `{params.matches_table}`")
         lines.append(
-            f"WHERE ABS(match_confidence - 0.5) <= {params.uncertainty_window}"
+            f"WHERE ABS({MATCH_CONFIDENCE} - 0.5) <= {params.uncertainty_window}"
         )
-        lines.append("ORDER BY ABS(match_confidence - 0.5) ASC")
+        lines.append(f"ORDER BY ABS({MATCH_CONFIDENCE} - 0.5) ASC")
         lines.append(f"LIMIT {params.queue_size}")
     else:
         lines.append("SELECT")
-        lines.append("  l_entity_uid,")
-        lines.append("  r_entity_uid,")
-        lines.append("  total_score,")
-        lines.append("  match_confidence,")
+        lines.append(f"  {LEFT_ENTITY_UID},")
+        lines.append(f"  {RIGHT_ENTITY_UID},")
+        lines.append(f"  {MATCH_TOTAL_SCORE},")
+        lines.append(f"  {MATCH_CONFIDENCE},")
 
         if params.min_score > 0:
             lines.append(
-                f"  ABS(total_score - {params.min_score}) AS uncertainty,"
+                f"  ABS({MATCH_TOTAL_SCORE} - {params.min_score}) AS {MATCH_UNCERTAINTY},"
             )
         else:
             lines.append(
-                "  ABS(match_confidence - 0.5) AS uncertainty,"
+                f"  ABS({MATCH_CONFIDENCE} - 0.5) AS {MATCH_UNCERTAINTY},"
             )
 
-        lines.append("  CAST(NULL AS BOOL) AS human_label,")
-        lines.append("  CURRENT_TIMESTAMP() AS queued_at")
+        lines.append(f"  CAST(NULL AS BOOL) AS {HUMAN_LABEL},")
+        lines.append(f"  CURRENT_TIMESTAMP() AS {QUEUED_AT}")
         lines.append(f"FROM `{params.matches_table}`")
 
         if params.min_score > 0:
             lines.append(
-                f"ORDER BY ABS(total_score - {params.min_score}) ASC"
+                f"ORDER BY ABS({MATCH_TOTAL_SCORE} - {params.min_score}) ASC"
             )
         else:
-            lines.append("ORDER BY ABS(match_confidence - 0.5) ASC")
+            lines.append(f"ORDER BY ABS({MATCH_CONFIDENCE} - 0.5) ASC")
 
         lines.append(f"LIMIT {params.queue_size}")
+
+    return SQLExpression.from_raw("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Label ingestion
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class IngestLabelsParams:
+    """Parameters for label ingestion SQL."""
+    labels_table: str
+    review_queue_table: str
+    tier_name: str
+
+
+def build_ingest_labels_sql(params: IngestLabelsParams) -> SQLExpression:
+    """Build SQL to ingest human labels from the review queue.
+
+    Creates the labels table if it doesn't exist, then MERGEs
+    labeled pairs from the review queue.
+    """
+    lines: list[str] = []
+
+    # Ensure labels table exists
+    lines.append(f"CREATE TABLE IF NOT EXISTS `{params.labels_table}` (")
+    lines.append(f"  {LEFT_ENTITY_UID} INT64 NOT NULL,")
+    lines.append(f"  {RIGHT_ENTITY_UID} INT64 NOT NULL,")
+    lines.append(f"  {IS_MATCH} BOOL NOT NULL,")
+    lines.append(f"  {MATCH_TIER_NAME} STRING,")
+    lines.append(f"  {LABEL_SOURCE} STRING DEFAULT 'active_learning',")
+    lines.append(f"  {INGESTED_AT} TIMESTAMP DEFAULT CURRENT_TIMESTAMP()")
+    lines.append(");")
+    lines.append("")
+
+    # Merge new labels from review queue
+    lines.append(f"MERGE INTO `{params.labels_table}` AS target")
+    lines.append("USING (")
+    lines.append("  SELECT")
+    lines.append(f"    {LEFT_ENTITY_UID},")
+    lines.append(f"    {RIGHT_ENTITY_UID},")
+    lines.append(
+        f"    CASE WHEN {HUMAN_LABEL} = 'match' THEN TRUE ELSE FALSE END AS {IS_MATCH},"
+    )
+    lines.append(f"    '{params.tier_name}' AS {MATCH_TIER_NAME},")
+    lines.append(f"    'active_learning' AS {LABEL_SOURCE},")
+    lines.append(f"    CURRENT_TIMESTAMP() AS {INGESTED_AT}")
+    lines.append(f"  FROM `{params.review_queue_table}`")
+    lines.append(f"  WHERE {HUMAN_LABEL} IS NOT NULL")
+    lines.append(") AS source")
+    lines.append(f"ON target.{LEFT_ENTITY_UID} = source.{LEFT_ENTITY_UID}")
+    lines.append(f"  AND target.{RIGHT_ENTITY_UID} = source.{RIGHT_ENTITY_UID}")
+    lines.append(f"  AND target.{MATCH_TIER_NAME} = source.{MATCH_TIER_NAME}")
+    lines.append("WHEN MATCHED THEN")
+    lines.append("  UPDATE SET")
+    lines.append(f"    {IS_MATCH} = source.{IS_MATCH},")
+    lines.append(f"    {INGESTED_AT} = source.{INGESTED_AT}")
+    lines.append("WHEN NOT MATCHED THEN")
+    lines.append(
+        f"  INSERT ({LEFT_ENTITY_UID}, {RIGHT_ENTITY_UID}, {IS_MATCH}, "
+        f"{MATCH_TIER_NAME}, {LABEL_SOURCE}, {INGESTED_AT})"
+    )
+    lines.append(
+        f"  VALUES (source.{LEFT_ENTITY_UID}, source.{RIGHT_ENTITY_UID}, source.{IS_MATCH},"
+    )
+    lines.append(
+        f"          source.{MATCH_TIER_NAME}, source.{LABEL_SOURCE}, source.{INGESTED_AT})"
+    )
 
     return SQLExpression.from_raw("\n".join(lines))

@@ -12,6 +12,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bq_entity_resolution.columns import (
+    ENTITY_UID,
+    SOURCE_NAME,
+    SOURCE_UPDATED_AT,
+    PIPELINE_LOADED_AT,
+    TERM_FREQUENCY_COLUMN,
+    TERM_FREQUENCY_VALUE,
+    TERM_FREQUENCY_COUNT,
+    TERM_FREQUENCY_RATIO,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -72,10 +82,10 @@ def build_features_sql(params: FeatureParams) -> SQLExpression:
     # UNION ALL source tables
     for i, src_table in enumerate(params.source_tables):
         parts.append("  SELECT")
-        parts.append("    entity_uid,")
-        parts.append("    source_name,")
-        parts.append("    _source_updated_at,")
-        parts.append("    _pipeline_loaded_at,")
+        parts.append(f"    {ENTITY_UID},")
+        parts.append(f"    {SOURCE_NAME},")
+        parts.append(f"    {SOURCE_UPDATED_AT},")
+        parts.append(f"    {PIPELINE_LOADED_AT},")
 
         for col in params.source_columns:
             parts.append(f"    {col},")
@@ -173,10 +183,10 @@ def build_term_frequencies_sql(
             parts.append("UNION ALL")
 
         parts.append("SELECT")
-        parts.append(f"  '{col.column_name}' AS tf_col,")
-        parts.append(f"  CAST({col.column_name} AS STRING) AS tf_value,")
-        parts.append(f"  COUNT(*) AS value_count,")
-        parts.append(f"  COUNT(*) / SUM(COUNT(*)) OVER () AS tf_frequency")
+        parts.append(f"  '{col.column_name}' AS {TERM_FREQUENCY_COLUMN},")
+        parts.append(f"  CAST({col.column_name} AS STRING) AS {TERM_FREQUENCY_VALUE},")
+        parts.append(f"  COUNT(*) AS {TERM_FREQUENCY_COUNT},")
+        parts.append(f"  COUNT(*) / SUM(COUNT(*)) OVER () AS {TERM_FREQUENCY_RATIO}")
         parts.append(f"FROM `{source_table}`")
         parts.append(f"WHERE {col.column_name} IS NOT NULL")
         parts.append(f"GROUP BY {col.column_name}")

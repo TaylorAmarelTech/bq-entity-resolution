@@ -12,7 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from bq_entity_resolution.columns import ENTITY_UID, SOURCE_NAME, SOURCE_UPDATED_AT, PIPELINE_LOADED_AT
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import sql_escape
 
 
 @dataclass(frozen=True)
@@ -63,11 +65,6 @@ def _format_watermark_value(val: Any) -> str:
     return f"'{safe}'"
 
 
-def _sql_escape(val: str) -> str:
-    """Escape single quotes for SQL string literals."""
-    return val.replace("'", "''")
-
-
 def build_staging_sql(params: StagingParams) -> SQLExpression:
     """Build staging/incremental load SQL.
 
@@ -84,15 +81,15 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
     parts.append("SELECT")
 
     # Entity UID
-    escaped_name = _sql_escape(params.source_name)
-    parts.append(f"  CAST(FARM_FINGERPRINT(")
+    escaped_name = sql_escape(params.source_name)
+    parts.append(f"  FARM_FINGERPRINT(")
     parts.append(f"    CONCAT(")
     parts.append(f"      '{escaped_name}', '||',")
     parts.append(f"      CAST({params.unique_key} AS STRING)")
     parts.append(f"    )")
-    parts.append(f"  ) AS STRING) AS entity_uid,")
+    parts.append(f"  ) AS {ENTITY_UID},")
     parts.append(f"")
-    parts.append(f"  '{escaped_name}' AS source_name,")
+    parts.append(f"  '{escaped_name}' AS {SOURCE_NAME},")
     parts.append(f"")
 
     # Source columns
@@ -104,8 +101,8 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
         parts.append(f"  {col},")
 
     # Metadata columns
-    parts.append(f"  {params.updated_at} AS _source_updated_at,")
-    parts.append(f"  CURRENT_TIMESTAMP() AS _pipeline_loaded_at")
+    parts.append(f"  {params.updated_at} AS {SOURCE_UPDATED_AT},")
+    parts.append(f"  CURRENT_TIMESTAMP() AS {PIPELINE_LOADED_AT}")
     parts.append(f"")
     parts.append(f"FROM `{params.source_table}` AS src")
 
@@ -143,7 +140,7 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
 
     # Batch size limit with deterministic ordering
     if params.batch_size:
-        parts.append(f"ORDER BY {params.updated_at}, entity_uid")
+        parts.append(f"ORDER BY {params.updated_at}, {ENTITY_UID}")
         parts.append(f"LIMIT {params.batch_size}")
 
     return SQLExpression.from_raw("\n".join(parts))

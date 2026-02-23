@@ -11,6 +11,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bq_entity_resolution.columns import (
+    ENTITY_UID,
+    CLUSTER_ID,
+    SOURCE_NAME,
+    SOURCE_UPDATED_AT,
+    PIPELINE_LOADED_AT,
+    LEFT_ENTITY_UID,
+    RIGHT_ENTITY_UID,
+    MATCH_TOTAL_SCORE,
+    MATCH_TIER_NAME,
+    MATCH_TIER_PRIORITY,
+    MATCH_CONFIDENCE,
+    MATCHED_AT,
+    RESOLVED_ENTITY_ID,
+    CANONICAL_ENTITY_UID,
+    IS_CANONICAL,
+    CANONICAL_SCORE,
+    MATCHED_BY_TIER,
+)
+from bq_entity_resolution.sql.builders.golden_record import (
+    FieldStrategy,
+    GoldenRecordParams,
+    build_golden_record_cte,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -21,7 +45,7 @@ class GoldOutputParams:
     source_table: str
     cluster_table: str
     matches_table: str
-    canonical_method: str = "completeness"  # 'completeness', 'recency', 'source_priority'
+    canonical_method: str = "completeness"  # 'completeness', 'recency', 'source_priority', 'field_merge'
     scoring_columns: list[str] = field(default_factory=list)
     source_columns: list[str] = field(default_factory=list)
     passthrough_columns: list[str] = field(default_factory=list)
@@ -30,6 +54,19 @@ class GoldOutputParams:
     partition_column: str | None = None
     cluster_columns: list[str] = field(default_factory=list)
     source_priority: list[str] = field(default_factory=list)
+    # Field-level merge settings (used when canonical_method = 'field_merge')
+    field_strategies: list[FieldStrategy] = field(default_factory=list)
+    default_field_strategy: str = "most_complete"
+    # Reconciliation strategy for match deduplication
+    reconciliation_strategy: str = "tier_priority"
+
+
+def _match_metadata_order_by(strategy: str) -> str:
+    """Return the ORDER BY clause for match metadata deduplication."""
+    if strategy == "highest_score":
+        return f"ORDER BY {MATCH_TOTAL_SCORE} DESC, {MATCH_TIER_PRIORITY} ASC"
+    # tier_priority (default) and manual_review both use tier ordering
+    return f"ORDER BY {MATCH_TIER_PRIORITY} ASC, {MATCH_TOTAL_SCORE} DESC"
 
 
 def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
@@ -37,7 +74,20 @@ def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
 
     Joins clusters to featured data, elects canonical records,
     and produces the final output with optional match metadata.
+
+    Supports four canonical methods:
+    - completeness: record with most non-null fields
+    - recency: most recently updated record
+    - source_priority: record from highest-priority source
+    - field_merge: golden record assembled from best field per column
     """
+    if params.canonical_method == "field_merge":
+        return _build_field_merge_sql(params)
+    return _build_standard_sql(params)
+
+
+def _build_standard_sql(params: GoldOutputParams) -> SQLExpression:
+    """Standard canonical election (one record per cluster)."""
     parts: list[str] = []
 
     parts.append(f"CREATE OR REPLACE TABLE `{params.target_table}`")
@@ -56,17 +106,17 @@ def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
     parts.append("WITH clustered AS (")
     parts.append("  SELECT")
     parts.append("    f.*,")
-    parts.append("    c.cluster_id")
+    parts.append(f"    c.{CLUSTER_ID}")
     parts.append(f"  FROM `{params.source_table}` f")
-    parts.append(f"  INNER JOIN `{params.cluster_table}` c USING (entity_uid)")
+    parts.append(f"  INNER JOIN `{params.cluster_table}` c USING ({ENTITY_UID})")
     parts.append("),")
     parts.append("")
 
     # CTE: canonical_scores
     parts.append("canonical_scores AS (")
     parts.append("  SELECT")
-    parts.append("    entity_uid,")
-    parts.append("    cluster_id,")
+    parts.append(f"    {ENTITY_UID},")
+    parts.append(f"    {CLUSTER_ID},")
 
     if params.canonical_method == "completeness":
         score_terms: list[str] = []
@@ -75,18 +125,18 @@ def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
                 f"CASE WHEN {col} IS NOT NULL THEN 1 ELSE 0 END"
             )
         if score_terms:
-            parts.append(f"    ({' + '.join(score_terms)}) AS canonical_score,")
+            parts.append(f"    ({' + '.join(score_terms)}) AS {CANONICAL_SCORE},")
         else:
-            parts.append("    0 AS canonical_score,")
+            parts.append(f"    0 AS {CANONICAL_SCORE},")
     elif params.canonical_method == "recency":
-        parts.append("    UNIX_MICROS(_source_updated_at) AS canonical_score,")
+        parts.append(f"    UNIX_MICROS({SOURCE_UPDATED_AT}) AS {CANONICAL_SCORE},")
     elif params.canonical_method == "source_priority":
         cases: list[str] = []
         for i, src in enumerate(params.source_priority):
             cases.append(f"WHEN '{src}' THEN {1000 - i}")
         case_expr = " ".join(cases)
         parts.append(
-            f"    CASE source_name {case_expr} ELSE 0 END AS canonical_score,"
+            f"    CASE {SOURCE_NAME} {case_expr} ELSE 0 END AS {CANONICAL_SCORE},"
         )
 
     # Remove trailing comma from last line
@@ -96,17 +146,16 @@ def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
     parts.append("")
 
     # CTE: canonicals — elect one canonical per cluster
-    # Uses ROW_NUMBER for portability across BigQuery and DuckDB
     parts.append("canonicals AS (")
-    parts.append("  SELECT cluster_id, entity_uid AS canonical_entity_uid")
+    parts.append(f"  SELECT {CLUSTER_ID}, {ENTITY_UID} AS {CANONICAL_ENTITY_UID}")
     parts.append("  FROM (")
     parts.append("    SELECT")
-    parts.append("      cluster_id,")
-    parts.append("      entity_uid,")
+    parts.append(f"      {CLUSTER_ID},")
+    parts.append(f"      {ENTITY_UID},")
     parts.append("      ROW_NUMBER() OVER (")
     parts.append(
-        "        PARTITION BY cluster_id "
-        "ORDER BY canonical_score DESC, entity_uid ASC"
+        f"        PARTITION BY {CLUSTER_ID} "
+        f"ORDER BY {CANONICAL_SCORE} DESC, {ENTITY_UID} ASC"
     )
     parts.append("      ) AS rn")
     parts.append("    FROM canonical_scores")
@@ -120,12 +169,12 @@ def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
     parts.append("  SELECT")
     parts.append(
         f"    '{params.entity_id_prefix}_' || "
-        f"CAST(cl.cluster_id AS STRING) AS resolved_entity_id,"
+        f"CAST(cl.{CLUSTER_ID} AS STRING) AS {RESOLVED_ENTITY_ID},"
     )
-    parts.append("    cl.cluster_id,")
-    parts.append("    can.canonical_entity_uid,")
+    parts.append(f"    cl.{CLUSTER_ID},")
+    parts.append(f"    can.{CANONICAL_ENTITY_UID},")
     parts.append(
-        "    (f.entity_uid = can.canonical_entity_uid) AS is_canonical,"
+        f"    (f.{ENTITY_UID} = can.{CANONICAL_ENTITY_UID}) AS {IS_CANONICAL},"
     )
 
     # Source columns
@@ -136,46 +185,119 @@ def build_gold_output_sql(params: GoldOutputParams) -> SQLExpression:
     for col in params.passthrough_columns:
         parts.append(f"    f.{col},")
 
-    parts.append("    f.source_name,")
-    parts.append("    f.entity_uid,")
-    parts.append("    f._source_updated_at,")
-    parts.append("    f._pipeline_loaded_at")
+    parts.append(f"    f.{SOURCE_NAME},")
+    parts.append(f"    f.{ENTITY_UID},")
+    parts.append(f"    f.{SOURCE_UPDATED_AT},")
+    parts.append(f"    f.{PIPELINE_LOADED_AT}")
     parts.append("")
     parts.append("  FROM clustered f")
-    parts.append("  JOIN canonicals can ON f.cluster_id = can.cluster_id")
+    parts.append(f"  JOIN canonicals can ON f.{CLUSTER_ID} = can.{CLUSTER_ID}")
     parts.append(
-        f"  JOIN `{params.cluster_table}` cl ON f.entity_uid = cl.entity_uid"
+        f"  JOIN `{params.cluster_table}` cl ON f.{ENTITY_UID} = cl.{ENTITY_UID}"
     )
     parts.append(")")
     parts.append("")
 
     # Final SELECT
+    _append_final_select(parts, params)
+
+    return SQLExpression.from_raw("\n".join(parts))
+
+
+def _build_field_merge_sql(params: GoldOutputParams) -> SQLExpression:
+    """Field-level golden record assembly (best field from best source)."""
+    parts: list[str] = []
+
+    parts.append(f"CREATE OR REPLACE TABLE `{params.target_table}`")
+
+    if params.partition_column:
+        parts.append(f"PARTITION BY {params.partition_column}")
+
+    if params.cluster_columns:
+        cols = ", ".join(params.cluster_columns)
+        parts.append(f"CLUSTER BY {cols}")
+
+    parts.append("AS")
+    parts.append("")
+
+    # CTE: clustered
+    parts.append("WITH clustered AS (")
+    parts.append("  SELECT")
+    parts.append("    f.*,")
+    parts.append(f"    c.{CLUSTER_ID}")
+    parts.append(f"  FROM `{params.source_table}` f")
+    parts.append(f"  INNER JOIN `{params.cluster_table}` c USING ({ENTITY_UID})")
+    parts.append("),")
+    parts.append("")
+
+    # Golden record CTEs
+    golden_cte = build_golden_record_cte(GoldenRecordParams(
+        source_columns=params.source_columns,
+        field_strategies=params.field_strategies,
+        default_strategy=params.default_field_strategy,
+        source_priority=params.source_priority,
+        scoring_columns=params.scoring_columns,
+    ))
+    parts.append(golden_cte.render() + ",")
+    parts.append("")
+
+    # CTE: resolved — use golden_fields for column values
+    parts.append("resolved AS (")
+    parts.append("  SELECT")
+    parts.append(
+        f"    '{params.entity_id_prefix}_' || "
+        f"CAST(g.{CLUSTER_ID} AS STRING) AS {RESOLVED_ENTITY_ID},"
+    )
+    parts.append(f"    g.{CLUSTER_ID},")
+    parts.append(f"    g.{ENTITY_UID} AS {CANONICAL_ENTITY_UID},")
+    parts.append(f"    TRUE AS {IS_CANONICAL},")
+
+    for col in params.source_columns:
+        parts.append(f"    g.{col},")
+
+    parts.append(f"    g.{SOURCE_NAME},")
+    parts.append(f"    g.{ENTITY_UID},")
+    parts.append(f"    g.{SOURCE_UPDATED_AT},")
+    parts.append(f"    CURRENT_TIMESTAMP() AS {PIPELINE_LOADED_AT}")
+    parts.append("")
+    parts.append("  FROM golden_fields g")
+    parts.append("  WHERE g.rn = 1")
+    parts.append(")")
+    parts.append("")
+
+    # Final SELECT
+    _append_final_select(parts, params)
+
+    return SQLExpression.from_raw("\n".join(parts))
+
+
+def _append_final_select(parts: list[str], params: GoldOutputParams) -> None:
+    """Append the final SELECT with optional match metadata."""
     parts.append("SELECT")
     parts.append("  r.*")
 
     if params.include_match_metadata:
-        parts.append("  ,m.tier_name AS matched_by_tier")
-        parts.append("  ,m.total_score AS match_score")
-        parts.append("  ,m.match_confidence")
-        parts.append("  ,m.matched_at")
+        parts.append(f"  ,m.{MATCH_TIER_NAME} AS {MATCHED_BY_TIER}")
+        parts.append(f"  ,m.{MATCH_TOTAL_SCORE} AS match_score")
+        parts.append(f"  ,m.{MATCH_CONFIDENCE}")
+        parts.append(f"  ,m.{MATCHED_AT}")
 
     parts.append("FROM resolved r")
 
     if params.include_match_metadata:
+        order_by = _match_metadata_order_by(params.reconciliation_strategy)
         parts.append("LEFT JOIN (")
         parts.append("  SELECT")
-        parts.append("    l_entity_uid,")
-        parts.append("    r_entity_uid,")
-        parts.append("    tier_name,")
-        parts.append("    total_score,")
-        parts.append("    match_confidence,")
-        parts.append("    matched_at,")
+        parts.append(f"    {LEFT_ENTITY_UID},")
+        parts.append(f"    {RIGHT_ENTITY_UID},")
+        parts.append(f"    {MATCH_TIER_NAME},")
+        parts.append(f"    {MATCH_TOTAL_SCORE},")
+        parts.append(f"    {MATCH_CONFIDENCE},")
+        parts.append(f"    {MATCHED_AT},")
         parts.append("    ROW_NUMBER() OVER (")
-        parts.append("      PARTITION BY r_entity_uid")
-        parts.append("      ORDER BY tier_priority ASC, total_score DESC")
+        parts.append(f"      PARTITION BY {RIGHT_ENTITY_UID}")
+        parts.append(f"      {order_by}")
         parts.append("    ) AS rn")
         parts.append(f"  FROM `{params.matches_table}`")
         parts.append(") m")
-        parts.append("  ON r.entity_uid = m.r_entity_uid AND m.rn = 1")
-
-    return SQLExpression.from_raw("\n".join(parts))
+        parts.append(f"  ON r.{ENTITY_UID} = m.{RIGHT_ENTITY_UID} AND m.rn = 1")

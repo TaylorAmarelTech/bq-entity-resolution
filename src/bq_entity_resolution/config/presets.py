@@ -170,12 +170,12 @@ def person_linkage_preset(
             columns=col_mappings,
         ))
 
-    # Generate features, blocking, comparisons from roles
-    features, blocking_keys, comparisons = _generate_from_roles(columns)
+    # Generate features, blocking, comparison pool from roles
+    features, blocking_keys, comparison_pool = _generate_from_roles(columns)
 
-    # Build tiers
+    # Build tiers (using pool references)
     blocking_key_names = [bk.name for bk in blocking_keys]
-    tiers = _build_default_tiers(blocking_key_names, comparisons)
+    tiers = _build_default_tiers(blocking_key_names, comparison_pool)
 
     return PipelineConfig(
         project=ProjectConfig(name=project_name, bq_project=bq_project),
@@ -184,8 +184,134 @@ def person_linkage_preset(
             name_features=FeatureGroupConfig(features=features),
             blocking_keys=blocking_keys,
         ),
+        comparison_pool=comparison_pool,
         matching_tiers=tiers,
         link_type="link_only",
+    )
+
+
+def insurance_dedup_preset(
+    bq_project: str,
+    source_table: str,
+    unique_key: str = "id",
+    updated_at: str = "updated_at",
+    columns: dict[str, str] | None = None,
+    project_name: str = "insurance_dedup",
+) -> PipelineConfig:
+    """Preset for insurance entity resolution (claims, policies).
+
+    Auto-generates features for insurance attributes: policy number,
+    claim number, insured name, DOB, address, phone, SSN.
+
+    Args:
+        bq_project: GCP project ID.
+        source_table: Source table with insurance records.
+        unique_key: Primary key column.
+        updated_at: Timestamp column.
+        columns: {column_name: role} mapping. Common roles:
+            policy_number, claim_number, first_name, last_name,
+            date_of_birth, date_of_loss, address_line_1, city,
+            state, zip_code, phone, email, ssn.
+        project_name: Project name.
+    """
+    if not columns:
+        raise ValueError(
+            "columns dict required: {column_name: role}. "
+            "Common roles: policy_number, claim_number, first_name, "
+            "last_name, date_of_birth, date_of_loss, ssn, phone, email"
+        )
+
+    return _build_config(
+        bq_project=bq_project,
+        project_name=project_name,
+        source_table=source_table,
+        unique_key=unique_key,
+        updated_at=updated_at,
+        role_map=columns,
+        link_type="dedupe_only",
+    )
+
+
+def financial_transaction_preset(
+    bq_project: str,
+    source_table: str,
+    unique_key: str = "id",
+    updated_at: str = "updated_at",
+    columns: dict[str, str] | None = None,
+    project_name: str = "financial_txn_match",
+) -> PipelineConfig:
+    """Preset for financial transaction matching.
+
+    Auto-generates features for financial attributes: account number,
+    routing number, transaction amount/date, customer name.
+
+    Args:
+        bq_project: GCP project ID.
+        source_table: Source table with transaction records.
+        unique_key: Primary key column.
+        updated_at: Timestamp column.
+        columns: {column_name: role} mapping. Common roles:
+            account_number, routing_number, transaction_amount,
+            transaction_date, first_name, last_name, email, phone.
+        project_name: Project name.
+    """
+    if not columns:
+        raise ValueError(
+            "columns dict required: {column_name: role}. "
+            "Common roles: account_number, routing_number, "
+            "transaction_amount, transaction_date, first_name, last_name"
+        )
+
+    return _build_config(
+        bq_project=bq_project,
+        project_name=project_name,
+        source_table=source_table,
+        unique_key=unique_key,
+        updated_at=updated_at,
+        role_map=columns,
+        link_type="link_and_dedupe",
+    )
+
+
+def healthcare_patient_preset(
+    bq_project: str,
+    source_table: str,
+    unique_key: str = "id",
+    updated_at: str = "updated_at",
+    columns: dict[str, str] | None = None,
+    project_name: str = "patient_match",
+) -> PipelineConfig:
+    """Preset for healthcare patient matching.
+
+    Auto-generates features for healthcare attributes: NPI, MRN,
+    patient name, DOB, address, phone, SSN.
+
+    Args:
+        bq_project: GCP project ID.
+        source_table: Source table with patient records.
+        unique_key: Primary key column.
+        updated_at: Timestamp column.
+        columns: {column_name: role} mapping. Common roles:
+            npi, mrn, first_name, last_name, date_of_birth,
+            address_line_1, city, state, zip_code, phone, email, ssn.
+        project_name: Project name.
+    """
+    if not columns:
+        raise ValueError(
+            "columns dict required: {column_name: role}. "
+            "Common roles: npi, mrn, first_name, last_name, "
+            "date_of_birth, address_line_1, city, state, zip_code, "
+            "phone, email, ssn"
+        )
+
+    return _build_config(
+        bq_project=bq_project,
+        project_name=project_name,
+        source_table=source_table,
+        unique_key=unique_key,
+        updated_at=updated_at,
+        role_map=columns,
+        link_type="dedupe_only",
     )
 
 
@@ -280,12 +406,12 @@ def _build_config(
         columns=col_mappings,
     )
 
-    # Generate features, blocking keys, comparisons
-    features, blocking_keys, comparisons = _generate_from_roles(role_map)
+    # Generate features, blocking keys, comparison pool
+    features, blocking_keys, comparison_pool = _generate_from_roles(role_map)
 
-    # Build tiers
+    # Build tiers (using pool references)
     blocking_key_names = [bk.name for bk in blocking_keys]
-    tiers = _build_default_tiers(blocking_key_names, comparisons)
+    tiers = _build_default_tiers(blocking_key_names, comparison_pool)
 
     return PipelineConfig(
         project=ProjectConfig(name=project_name, bq_project=bq_project),
@@ -294,6 +420,7 @@ def _build_config(
             name_features=FeatureGroupConfig(features=features),
             blocking_keys=blocking_keys,
         ),
+        comparison_pool=comparison_pool,
         matching_tiers=tiers,
         link_type=link_type,
     )
@@ -301,11 +428,15 @@ def _build_config(
 
 def _generate_from_roles(
     role_map: dict[str, str],
-) -> tuple[list[FeatureDef], list[BlockingKeyDef], list[ComparisonDef]]:
-    """Generate features, blocking keys, and comparisons from roles."""
+) -> tuple[list[FeatureDef], list[BlockingKeyDef], dict[str, ComparisonDef]]:
+    """Generate features, blocking keys, and comparison pool from roles.
+
+    Returns comparison pool as a dict keyed by name (e.g. "email_exact")
+    instead of a flat list.  Tiers reference these by name via ``ref``.
+    """
     all_features: list[FeatureDef] = []
     all_blocking_keys: list[BlockingKeyDef] = []
-    all_comparisons: list[ComparisonDef] = []
+    comparison_pool: dict[str, ComparisonDef] = {}
     seen_bk_names: set[str] = set()
 
     for col, role in role_map.items():
@@ -327,34 +458,44 @@ def _generate_from_roles(
                 ))
                 seen_bk_names.add(bk_dict["name"])
 
-        # Comparisons
+        # Comparisons → pool entries keyed by name
         for comp_dict in comparisons_for_role(col, role):
-            all_comparisons.append(ComparisonDef(
+            pool_name = comp_dict["name"]
+            comparison_pool[pool_name] = ComparisonDef(
                 left=comp_dict["left"],
                 right=comp_dict["right"],
                 method=comp_dict["method"],
                 weight=comp_dict["weight"],
-            ))
+            )
 
-    return all_features, all_blocking_keys, all_comparisons
+    return all_features, all_blocking_keys, comparison_pool
 
 
 def _build_default_tiers(
     blocking_key_names: list[str],
-    comparisons: list[ComparisonDef],
+    comparison_pool: dict[str, ComparisonDef],
 ) -> list[MatchingTierConfig]:
-    """Build default matching tiers from blocking keys and comparisons.
+    """Build default matching tiers using comparison pool references.
 
     Creates two tiers:
     1. "exact" — high-confidence exact matches using all blocking keys
     2. "fuzzy" — lower-threshold fuzzy matches
 
+    Tiers reference the comparison pool by name.  The PipelineConfig
+    ``_resolve_comparison_refs`` validator hydrates them at load time.
+
     If only one blocking key exists, both tiers use the same key.
     """
     if not blocking_key_names:
         raise ValueError("No blocking keys generated from roles")
-    if not comparisons:
+    if not comparison_pool:
         raise ValueError("No comparisons generated from roles")
+
+    # Build pool ref comparisons (tier references the pool by name)
+    pool_refs = [ComparisonDef(ref=name) for name in comparison_pool]
+
+    # Compute total weight from pool entries for threshold calculation
+    total_weight = sum(c.weight for c in comparison_pool.values())
 
     # Split blocking keys across tiers if we have enough
     if len(blocking_key_names) >= 2:
@@ -371,10 +512,10 @@ def _build_default_tiers(
         blocking=TierBlockingConfig(
             paths=[BlockingPathDef(keys=exact_keys)],
         ),
-        comparisons=comparisons,
+        comparisons=pool_refs,
         threshold=ThresholdConfig(
             method="sum",
-            min_score=sum(c.weight for c in comparisons) * 0.7,
+            min_score=total_weight * 0.7,
         ),
     )
 
@@ -385,10 +526,10 @@ def _build_default_tiers(
         blocking=TierBlockingConfig(
             paths=[BlockingPathDef(keys=fuzzy_keys)],
         ),
-        comparisons=comparisons,
+        comparisons=list(pool_refs),  # fresh copy
         threshold=ThresholdConfig(
             method="sum",
-            min_score=sum(c.weight for c in comparisons) * 0.4,
+            min_score=total_weight * 0.4,
         ),
     )
 

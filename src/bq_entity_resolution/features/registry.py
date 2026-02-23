@@ -144,9 +144,7 @@ def first_word(inputs: list[str], **_: Any) -> str:
 def last_word(inputs: list[str], **_: Any) -> str:
     """Extract last word from a string."""
     col = inputs[0]
-    return (
-        f"SPLIT(TRIM({col}), ' ')[ORDINAL(ARRAY_LENGTH(SPLIT(TRIM({col}), ' ')))]"
-    )
+    return f"ARRAY_REVERSE(SPLIT(TRIM({col}), ' '))[OFFSET(0)]"
 
 
 @register("initials")
@@ -370,7 +368,7 @@ def nullif_empty(inputs: list[str], **_: Any) -> str:
 @register("farm_fingerprint")
 def farm_fingerprint(inputs: list[str], **_: Any) -> str:
     """FARM_FINGERPRINT of a single column."""
-    return f"FARM_FINGERPRINT(CAST({inputs[0]} AS STRING))"
+    return f"FARM_FINGERPRINT({inputs[0]})"
 
 
 @register("farm_fingerprint_concat")

@@ -25,6 +25,7 @@ from bq_entity_resolution.sql.builders.gold_output import (
     GoldOutputParams,
     build_gold_output_sql,
 )
+from bq_entity_resolution.sql.builders.golden_record import FieldStrategy
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
 
@@ -138,6 +139,21 @@ class GoldOutputStage(Stage):
             recon.canonical_selection, "source_priority", []
         )
 
+        # Field-level merge strategies
+        field_strategies = []
+        for fs in getattr(recon.canonical_selection, "field_strategies", []):
+            field_strategies.append(FieldStrategy(
+                column=fs.column,
+                strategy=fs.strategy,
+                source_priority=fs.source_priority,
+            ))
+        default_field_strategy = getattr(
+            recon.canonical_selection, "default_field_strategy", "most_complete"
+        )
+
+        # Reconciliation strategy for match deduplication
+        reconciliation_strategy = getattr(recon, "strategy", "tier_priority")
+
         params = GoldOutputParams(
             target_table=self.outputs["gold"].fq_name,
             source_table=self.inputs["featured"].fq_name,
@@ -153,6 +169,9 @@ class GoldOutputStage(Stage):
             partition_column=getattr(output, "partition_column", None),
             cluster_columns=getattr(output, "cluster_columns", []),
             source_priority=source_priority,
+            field_strategies=field_strategies,
+            default_field_strategy=default_field_strategy,
+            reconciliation_strategy=reconciliation_strategy,
         )
 
         return [build_gold_output_sql(params)]

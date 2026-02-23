@@ -250,26 +250,67 @@ class MatchingStage(Stage):
         """Convert tier hard negatives to builder format."""
         result: list[HardNegative] = []
         for hn in getattr(tier, "hard_negatives", []):
-            result.append(
-                HardNegative(
-                    sql_condition=hn.sql_condition,
-                    action=hn.action,
-                    penalty=getattr(hn, "penalty", 0.0),
+            sql_cond = self._hard_negative_sql(hn)
+            if sql_cond:
+                result.append(
+                    HardNegative(
+                        sql_condition=sql_cond,
+                        action=hn.action,
+                        penalty=getattr(hn, "penalty", 0.0),
+                    )
                 )
-            )
         return result
 
     def _build_soft_signals(self, tier: MatchingTierConfig) -> list[SoftSignal]:
         """Convert tier soft signals to builder format."""
         result: list[SoftSignal] = []
         for ss in getattr(tier, "soft_signals", []):
-            result.append(
-                SoftSignal(
-                    sql_condition=ss.sql_condition,
-                    bonus=getattr(ss, "bonus", 0.0),
+            sql_cond = self._soft_signal_sql(ss)
+            if sql_cond:
+                result.append(
+                    SoftSignal(
+                        sql_condition=sql_cond,
+                        bonus=getattr(ss, "bonus", 0.0),
+                    )
                 )
-            )
         return result
+
+    @staticmethod
+    def _hard_negative_sql(hn: Any) -> str:
+        """Generate SQL condition for a hard negative rule."""
+        if getattr(hn, "sql", None):
+            return hn.sql
+        left = hn.left
+        right = getattr(hn, "right", None) or left
+        method = hn.method
+        if method == "different":
+            return f"l.{left} IS DISTINCT FROM r.{right}"
+        elif method == "null_either":
+            return f"(l.{left} IS NULL OR r.{right} IS NULL)"
+        return ""
+
+    @staticmethod
+    def _soft_signal_sql(ss: Any) -> str:
+        """Generate SQL condition for a soft signal."""
+        if getattr(ss, "sql", None):
+            return ss.sql
+        left = ss.left
+        right = getattr(ss, "right", None) or left
+        method = ss.method
+        if method == "exact":
+            return f"l.{left} = r.{right}"
+        elif method == "exact_case_insensitive":
+            return f"LOWER(l.{left}) = LOWER(r.{right})"
+        elif method == "both_null":
+            return f"(l.{left} IS NULL AND r.{right} IS NULL)"
+        # Fall back to comparison function registry
+        func = COMPARISON_FUNCTIONS.get(method)
+        if func:
+            try:
+                return func(left, right)
+            except Exception:
+                pass
+        return ""
 
     def validate(self) -> list[str]:
         errors = []

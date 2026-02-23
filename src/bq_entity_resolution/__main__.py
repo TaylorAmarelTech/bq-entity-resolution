@@ -65,7 +65,7 @@ def run(
 ) -> None:
     """Execute the entity resolution pipeline."""
     from bq_entity_resolution.config.loader import load_config
-    from bq_entity_resolution.pipeline.orchestrator import PipelineOrchestrator
+    from bq_entity_resolution.pipeline.pipeline import Pipeline
 
     try:
         cfg = load_config(config, defaults)
@@ -89,23 +89,31 @@ def run(
                 f"{[t.name for t in cfg.matching_tiers]}"
             )
 
-        orchestrator = PipelineOrchestrator(cfg)
+        pipeline = Pipeline(cfg)
+
         if dry_run:
-            orchestrator.bq_client.dry_run = True
-            click.echo("DRY RUN — SQL will be validated but not executed")
+            plan = pipeline.plan(full_refresh=full_refresh)
+            click.echo("DRY RUN — Generated SQL preview:")
+            click.echo(plan.preview())
+        else:
+            from bq_entity_resolution.clients.bigquery import BigQueryClient
+            from bq_entity_resolution.backends.bigquery import BigQueryBackend
 
-        ctx = orchestrator.run(full_refresh=full_refresh)
+            bq_client = BigQueryClient(
+                project=cfg.project.bq_project,
+                location=cfg.project.bq_location,
+                max_bytes_billed=cfg.scale.max_bytes_billed,
+            )
+            backend = BigQueryBackend(bq_client)
+            result = pipeline.run(
+                backend=backend,
+                full_refresh=full_refresh,
+            )
 
-        # Print summary
-        click.echo(f"\nPipeline {ctx.status}: {ctx.run_id}")
-        click.echo(f"Duration: {ctx.duration_seconds:.1f}s")
-        click.echo(f"Sources staged: {len(ctx.staged_sources)}")
-        click.echo(f"Tiers executed: {len(ctx.tier_results)}")
-        for name, result in ctx.tier_results.items():
-            click.echo(f"  {name}: {result.get('matches_found', 0)} matches")
-
-        if ctx.status == "failed":
-            sys.exit(1)
+            click.echo(f"\nPipeline completed: {result.run_id}")
+            click.echo(f"Stages executed: {len(result.completed_stages)}")
+            for stage in result.completed_stages:
+                click.echo(f"  - {stage}")
 
     except Exception as e:
         logger.exception("Pipeline failed: %s", e)
@@ -168,10 +176,9 @@ def validate(config: str, defaults: str | None) -> None:
 )
 def preview_sql(config: str, defaults: str | None, tier: str, stage: str) -> None:
     """Preview generated SQL for a specific tier without executing."""
-    from bq_entity_resolution.blocking.engine import BlockingEngine
     from bq_entity_resolution.config.loader import load_config
-    from bq_entity_resolution.matching.engine import MatchingEngine
-    from bq_entity_resolution.sql.generator import SQLGenerator
+    from bq_entity_resolution.stages.blocking import BlockingStage
+    from bq_entity_resolution.stages.matching import MatchingStage
 
     try:
         cfg = load_config(config, defaults)
@@ -181,18 +188,22 @@ def preview_sql(config: str, defaults: str | None, tier: str, stage: str) -> Non
             click.echo(f"Tier '{tier}' not found. Available: {available}", err=True)
             sys.exit(1)
 
-        sql_gen = SQLGenerator()
+        tier_index = next(
+            i for i, t in enumerate(cfg.matching_tiers) if t.name == tier
+        )
 
         if stage in ("all", "blocking"):
-            blocking = BlockingEngine(cfg, sql_gen)
+            blocking_stage = BlockingStage(tier_cfg, tier_index, cfg)
             click.echo("-- BLOCKING SQL --")
-            click.echo(blocking.generate_candidates_sql(tier_cfg, tier_index=0))
+            for expr in blocking_stage.plan():
+                click.echo(expr.render())
             click.echo()
 
         if stage in ("all", "matching"):
-            matching = MatchingEngine(cfg, sql_gen)
+            matching_stage = MatchingStage(tier_cfg, tier_index, cfg)
             click.echo("-- MATCHING SQL --")
-            click.echo(matching.generate_tier_sql(tier_cfg, tier_index=0))
+            for expr in matching_stage.plan():
+                click.echo(expr.render())
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -212,7 +223,6 @@ def estimate_params(config: str, defaults: str | None, tier: str) -> None:
     """Estimate m/u parameters for a Fellegi-Sunter tier."""
     from bq_entity_resolution.config.loader import load_config
     from bq_entity_resolution.matching.parameters import ParameterEstimator
-    from bq_entity_resolution.sql.generator import SQLGenerator
 
     try:
         cfg = load_config(config, defaults)
@@ -222,8 +232,7 @@ def estimate_params(config: str, defaults: str | None, tier: str) -> None:
             click.echo(f"Tier '{tier}' not found. Available: {available}", err=True)
             sys.exit(1)
 
-        sql_gen = SQLGenerator()
-        estimator = ParameterEstimator(cfg, sql_gen)
+        estimator = ParameterEstimator(cfg)
         training = estimator.resolve_training_config(tier_cfg)
 
         if training.method == "none":
@@ -258,7 +267,6 @@ def review_queue(config: str, defaults: str | None, tier: str) -> None:
     """Preview active learning review queue SQL for a tier."""
     from bq_entity_resolution.config.loader import load_config
     from bq_entity_resolution.matching.active_learning import ActiveLearningEngine
-    from bq_entity_resolution.sql.generator import SQLGenerator
 
     try:
         cfg = load_config(config, defaults)
@@ -268,10 +276,149 @@ def review_queue(config: str, defaults: str | None, tier: str) -> None:
             click.echo(f"Tier '{tier}' not found. Available: {available}", err=True)
             sys.exit(1)
 
-        sql_gen = SQLGenerator()
-        al_engine = ActiveLearningEngine(cfg, sql_gen)
+        al_engine = ActiveLearningEngine(cfg)
         click.echo("-- ACTIVE LEARNING REVIEW QUEUE SQL --")
         click.echo(al_engine.generate_review_queue_sql(tier_cfg))
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--config",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to pipeline config YAML",
+)
+@click.option("--defaults", default=None, type=click.Path(exists=True))
+@click.option(
+    "--source",
+    default=None,
+    help="Source name to profile (defaults to first source)",
+)
+@click.option(
+    "--columns",
+    default=None,
+    help="Comma-separated column names to profile (defaults to all)",
+)
+def profile(
+    config: str,
+    defaults: str | None,
+    source: str | None,
+    columns: str | None,
+) -> None:
+    """Profile source columns and suggest comparison weights.
+
+    Computes cardinality, null rates, and value distributions for
+    source columns, then suggests comparison weights based on
+    information content (log2(m/u)). No labeled data required.
+    """
+    from bq_entity_resolution.config.loader import load_config
+    from bq_entity_resolution.profiling.column_profiler import ColumnProfiler
+
+    try:
+        cfg = load_config(config, defaults)
+
+        # Resolve source
+        src = cfg.sources[0]
+        if source:
+            src = next((s for s in cfg.sources if s.name == source), None)
+            if not src:
+                available = [s.name for s in cfg.sources]
+                click.echo(f"Source '{source}' not found. Available: {available}", err=True)
+                sys.exit(1)
+
+        # Resolve columns
+        if columns:
+            col_names = [c.strip() for c in columns.split(",")]
+        else:
+            col_names = [c.name for c in src.columns]
+
+        profiler = ColumnProfiler()
+        sql = profiler.generate_profile_sql(src.table, col_names)
+
+        click.echo(f"Source: {src.name} ({src.table})")
+        click.echo(f"Columns: {', '.join(col_names)}")
+        click.echo()
+        click.echo("-- PROFILING SQL --")
+        click.echo("-- Run this in BigQuery, then use the results to set weights --")
+        click.echo(sql)
+        click.echo()
+
+        # Show suggestions from role-based defaults
+        suggestions = []
+        for comp_col in col_names:
+            from bq_entity_resolution.config.roles import detect_role, ROLE_COMPARISONS
+            role = detect_role(comp_col)
+            if role and role in ROLE_COMPARISONS:
+                for spec in ROLE_COMPARISONS[role]:
+                    suggestions.append(
+                        f"  {comp_col}: method={spec.method}, "
+                        f"default_weight={spec.weight}"
+                    )
+
+        if suggestions:
+            click.echo("Role-based default weights:")
+            for s in suggestions:
+                click.echo(s)
+            click.echo()
+            click.echo(
+                "To use data-driven weights instead, run the SQL above "
+                "in BigQuery and set weight_mode: profile in your config."
+            )
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--config",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to pipeline config YAML",
+)
+@click.option("--defaults", default=None, type=click.Path(exists=True))
+@click.option("--tier", required=True, help="Tier name to analyze")
+@click.option(
+    "--analysis",
+    default="contribution",
+    type=click.Choice(["contribution", "threshold", "impact"], case_sensitive=False),
+    help="Type of analysis to run",
+)
+def analyze(config: str, defaults: str | None, tier: str, analysis: str) -> None:
+    """Analyze weight sensitivity for a matching tier.
+
+    Three analysis types:
+    - contribution: which comparisons drive matches
+    - threshold: match counts at different threshold values
+    - impact: effect of changing each comparison's weight
+    """
+    from bq_entity_resolution.config.loader import load_config
+    from bq_entity_resolution.profiling.weight_sensitivity import WeightSensitivityAnalyzer
+
+    try:
+        cfg = load_config(config, defaults)
+        tier_cfg = next((t for t in cfg.matching_tiers if t.name == tier), None)
+        if not tier_cfg:
+            available = [t.name for t in cfg.matching_tiers]
+            click.echo(f"Tier '{tier}' not found. Available: {available}", err=True)
+            sys.exit(1)
+
+        analyzer = WeightSensitivityAnalyzer(cfg)
+
+        if analysis == "contribution":
+            click.echo(f"-- WEIGHT CONTRIBUTION ANALYSIS: {tier} --")
+            click.echo(analyzer.generate_contribution_sql(tier_cfg))
+        elif analysis == "threshold":
+            click.echo(f"-- THRESHOLD SWEEP: {tier} --")
+            click.echo(analyzer.generate_threshold_sweep_sql(tier_cfg))
+        elif analysis == "impact":
+            click.echo(f"-- WEIGHT IMPACT ANALYSIS: {tier} --")
+            click.echo(analyzer.generate_weight_impact_sql(tier_cfg))
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -300,7 +447,6 @@ def ingest_labels(
     from bq_entity_resolution.config.loader import load_config
     from bq_entity_resolution.matching.active_learning import ActiveLearningEngine
     from bq_entity_resolution.matching.parameters import ParameterEstimator
-    from bq_entity_resolution.sql.generator import SQLGenerator
 
     try:
         cfg = load_config(config, defaults)
@@ -310,8 +456,7 @@ def ingest_labels(
             click.echo(f"Tier '{tier}' not found. Available: {available}", err=True)
             sys.exit(1)
 
-        sql_gen = SQLGenerator()
-        al_engine = ActiveLearningEngine(cfg, sql_gen)
+        al_engine = ActiveLearningEngine(cfg)
 
         # Generate and show/execute ingestion SQL
         ingest_sql = al_engine.generate_label_ingestion_sql(tier_cfg)
@@ -332,7 +477,7 @@ def ingest_labels(
 
         # Optionally retrain
         if retrain:
-            estimator = ParameterEstimator(cfg, sql_gen)
+            estimator = ParameterEstimator(cfg)
             retrain_sql = estimator.generate_reestimation_sql(tier_cfg)
             if dry_run:
                 click.echo("\n-- REESTIMATION SQL --")

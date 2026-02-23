@@ -9,6 +9,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bq_entity_resolution.columns import (
+    ENTITY_UID,
+    CLUSTER_ID,
+    SOURCE_NAME,
+    LEFT_ENTITY_UID,
+    RIGHT_ENTITY_UID,
+    MATCH_CONFIDENCE,
+    CLUSTER_UID1,
+    CLUSTER_CID1,
+    CLUSTER_UID2,
+    CLUSTER_CID2,
+    CLUSTER_MIN_NEIGHBOR,
+    CLUSTER_METRIC_COUNT,
+    CLUSTER_METRIC_SINGLETON_COUNT,
+    CLUSTER_METRIC_SINGLETON_RATIO,
+    CLUSTER_METRIC_MAX_SIZE,
+    CLUSTER_METRIC_AVG_SIZE,
+    CLUSTER_METRIC_MEDIAN_SIZE,
+    CLUSTER_METRIC_AVG_SOURCE_DIVERSITY,
+    CLUSTER_METRIC_AVG_CONFIDENCE,
+    CLUSTER_METRIC_MIN_CONFIDENCE,
+    CLUSTER_METRIC_COMPUTED_AT,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -49,7 +72,7 @@ def build_cluster_assignment_sql(params: ClusteringParams) -> SQLExpression:
     lines.append(
         f"CREATE OR REPLACE TABLE `{params.cluster_table}` AS"
     )
-    lines.append("SELECT DISTINCT entity_uid, entity_uid AS cluster_id")
+    lines.append(f"SELECT DISTINCT {ENTITY_UID}, {ENTITY_UID} AS {CLUSTER_ID}")
     lines.append(f"FROM `{params.source_table}`;")
     lines.append("")
 
@@ -62,41 +85,41 @@ def build_cluster_assignment_sql(params: ClusteringParams) -> SQLExpression:
     # Build edge list with current cluster assignments
     lines.append("  CREATE OR REPLACE TEMP TABLE _edge_clusters AS")
     lines.append("  SELECT")
-    lines.append("    c1.entity_uid AS uid1,")
-    lines.append("    c1.cluster_id AS cid1,")
-    lines.append("    c2.entity_uid AS uid2,")
-    lines.append("    c2.cluster_id AS cid2")
+    lines.append(f"    c1.{ENTITY_UID} AS {CLUSTER_UID1},")
+    lines.append(f"    c1.{CLUSTER_ID} AS {CLUSTER_CID1},")
+    lines.append(f"    c2.{ENTITY_UID} AS {CLUSTER_UID2},")
+    lines.append(f"    c2.{CLUSTER_ID} AS {CLUSTER_CID2}")
     lines.append(f"  FROM `{params.all_matches_table}` m")
     lines.append(
-        f"  JOIN `{params.cluster_table}` c1 ON m.l_entity_uid = c1.entity_uid"
+        f"  JOIN `{params.cluster_table}` c1 ON m.{LEFT_ENTITY_UID} = c1.{ENTITY_UID}"
     )
     lines.append(
-        f"  JOIN `{params.cluster_table}` c2 ON m.r_entity_uid = c2.entity_uid;"
+        f"  JOIN `{params.cluster_table}` c2 ON m.{RIGHT_ENTITY_UID} = c2.{ENTITY_UID};"
     )
     lines.append("")
 
     # Compute new cluster_id = minimum reachable cluster_id
     lines.append("  CREATE OR REPLACE TEMP TABLE _new_clusters AS")
     lines.append("  SELECT")
-    lines.append("    entity_uid,")
+    lines.append(f"    {ENTITY_UID},")
     lines.append("    LEAST(")
-    lines.append("      cluster_id,")
-    lines.append("      COALESCE(min_neighbor, cluster_id)")
-    lines.append("    ) AS cluster_id")
+    lines.append(f"      {CLUSTER_ID},")
+    lines.append(f"      COALESCE({CLUSTER_MIN_NEIGHBOR}, {CLUSTER_ID})")
+    lines.append(f"    ) AS {CLUSTER_ID}")
     lines.append("  FROM (")
     lines.append("    SELECT")
-    lines.append("      c.entity_uid,")
-    lines.append("      c.cluster_id,")
+    lines.append(f"      c.{ENTITY_UID},")
+    lines.append(f"      c.{CLUSTER_ID},")
     lines.append("      MIN(")
     lines.append("        LEAST(")
-    lines.append("          COALESCE(e.cid1, c.cluster_id),")
-    lines.append("          COALESCE(e.cid2, c.cluster_id)")
+    lines.append(f"          COALESCE(e.{CLUSTER_CID1}, c.{CLUSTER_ID}),")
+    lines.append(f"          COALESCE(e.{CLUSTER_CID2}, c.{CLUSTER_ID})")
     lines.append("        )")
-    lines.append("      ) AS min_neighbor")
+    lines.append(f"      ) AS {CLUSTER_MIN_NEIGHBOR}")
     lines.append(f"    FROM `{params.cluster_table}` c")
     lines.append("    LEFT JOIN _edge_clusters e")
-    lines.append("      ON c.entity_uid = e.uid1 OR c.entity_uid = e.uid2")
-    lines.append("    GROUP BY c.entity_uid, c.cluster_id")
+    lines.append(f"      ON c.{ENTITY_UID} = e.{CLUSTER_UID1} OR c.{ENTITY_UID} = e.{CLUSTER_UID2}")
+    lines.append(f"    GROUP BY c.{ENTITY_UID}, c.{CLUSTER_ID}")
     lines.append("  );")
     lines.append("")
 
@@ -104,8 +127,8 @@ def build_cluster_assignment_sql(params: ClusteringParams) -> SQLExpression:
     lines.append("  SET rows_updated = (")
     lines.append("    SELECT COUNT(*)")
     lines.append("    FROM _new_clusters n")
-    lines.append(f"    JOIN `{params.cluster_table}` o USING (entity_uid)")
-    lines.append("    WHERE n.cluster_id != o.cluster_id")
+    lines.append(f"    JOIN `{params.cluster_table}` o USING ({ENTITY_UID})")
+    lines.append(f"    WHERE n.{CLUSTER_ID} != o.{CLUSTER_ID}")
     lines.append("  );")
     lines.append("")
 
@@ -120,6 +143,145 @@ def build_cluster_assignment_sql(params: ClusteringParams) -> SQLExpression:
     return SQLExpression.from_raw("\n".join(lines))
 
 
+@dataclass(frozen=True)
+class IncrementalClusteringParams:
+    """Parameters for incremental cluster assignment."""
+    all_matches_table: str
+    cluster_table: str
+    source_table: str
+    canonical_table: str
+    max_iterations: int = 20
+
+
+@dataclass(frozen=True)
+class PopulateCanonicalIndexParams:
+    """Parameters for canonical index population."""
+    canonical_table: str
+    source_table: str
+    cluster_table: str
+
+
+def build_incremental_cluster_sql(
+    params: IncrementalClusteringParams,
+) -> SQLExpression:
+    """Build incremental cluster assignment SQL.
+
+    Initializes from prior cluster assignments (canonical_index) combined
+    with new entities from the current batch as singletons, then propagates
+    minimum cluster_id through ALL match edges until convergence.
+    """
+    lines: list[str] = []
+
+    lines.append("DECLARE iteration INT64 DEFAULT 0;")
+    lines.append("DECLARE rows_updated INT64 DEFAULT 1;")
+    lines.append("")
+
+    # Step 1: Initialize from prior entities + new singletons
+    lines.append(
+        f"CREATE OR REPLACE TABLE `{params.cluster_table}` AS"
+    )
+    lines.append(
+        f"SELECT {ENTITY_UID}, {CLUSTER_ID} FROM `{params.canonical_table}`"
+    )
+    lines.append("UNION ALL")
+    lines.append(f"SELECT DISTINCT {ENTITY_UID}, {ENTITY_UID} AS {CLUSTER_ID}")
+    lines.append(f"FROM `{params.source_table}`")
+    lines.append(
+        f"WHERE {ENTITY_UID} NOT IN "
+        f"(SELECT {ENTITY_UID} FROM `{params.canonical_table}`);"
+    )
+    lines.append("")
+
+    # Step 2: Iterative propagation
+    lines.append(
+        f"WHILE rows_updated > 0 AND iteration < {params.max_iterations} DO"
+    )
+    lines.append("")
+
+    lines.append("  CREATE OR REPLACE TEMP TABLE _edge_clusters AS")
+    lines.append("  SELECT")
+    lines.append(f"    c1.{ENTITY_UID} AS {CLUSTER_UID1},")
+    lines.append(f"    c1.{CLUSTER_ID} AS {CLUSTER_CID1},")
+    lines.append(f"    c2.{ENTITY_UID} AS {CLUSTER_UID2},")
+    lines.append(f"    c2.{CLUSTER_ID} AS {CLUSTER_CID2}")
+    lines.append(f"  FROM `{params.all_matches_table}` m")
+    lines.append(
+        f"  JOIN `{params.cluster_table}` c1 ON m.{LEFT_ENTITY_UID} = c1.{ENTITY_UID}"
+    )
+    lines.append(
+        f"  JOIN `{params.cluster_table}` c2 ON m.{RIGHT_ENTITY_UID} = c2.{ENTITY_UID};"
+    )
+    lines.append("")
+
+    lines.append("  CREATE OR REPLACE TEMP TABLE _new_clusters AS")
+    lines.append("  SELECT")
+    lines.append(f"    {ENTITY_UID},")
+    lines.append("    LEAST(")
+    lines.append(f"      {CLUSTER_ID},")
+    lines.append(f"      COALESCE({CLUSTER_MIN_NEIGHBOR}, {CLUSTER_ID})")
+    lines.append(f"    ) AS {CLUSTER_ID}")
+    lines.append("  FROM (")
+    lines.append("    SELECT")
+    lines.append(f"      c.{ENTITY_UID},")
+    lines.append(f"      c.{CLUSTER_ID},")
+    lines.append("      MIN(")
+    lines.append("        LEAST(")
+    lines.append(f"          COALESCE(e.{CLUSTER_CID1}, c.{CLUSTER_ID}),")
+    lines.append(f"          COALESCE(e.{CLUSTER_CID2}, c.{CLUSTER_ID})")
+    lines.append("        )")
+    lines.append(f"      ) AS {CLUSTER_MIN_NEIGHBOR}")
+    lines.append(f"    FROM `{params.cluster_table}` c")
+    lines.append("    LEFT JOIN _edge_clusters e")
+    lines.append(f"      ON c.{ENTITY_UID} = e.{CLUSTER_UID1} OR c.{ENTITY_UID} = e.{CLUSTER_UID2}")
+    lines.append(f"    GROUP BY c.{ENTITY_UID}, c.{CLUSTER_ID}")
+    lines.append("  );")
+    lines.append("")
+
+    lines.append("  SET rows_updated = (")
+    lines.append("    SELECT COUNT(*)")
+    lines.append("    FROM _new_clusters n")
+    lines.append(f"    JOIN `{params.cluster_table}` o USING ({ENTITY_UID})")
+    lines.append(f"    WHERE n.{CLUSTER_ID} != o.{CLUSTER_ID}")
+    lines.append("  );")
+    lines.append("")
+
+    lines.append(f"  CREATE OR REPLACE TABLE `{params.cluster_table}` AS")
+    lines.append("  SELECT * FROM _new_clusters;")
+    lines.append("")
+    lines.append("  SET iteration = iteration + 1;")
+    lines.append("")
+    lines.append("END WHILE;")
+
+    return SQLExpression.from_raw("\n".join(lines))
+
+
+def build_populate_canonical_index_sql(
+    params: PopulateCanonicalIndexParams,
+) -> SQLExpression:
+    """Build SQL to upsert current batch entities into canonical_index.
+
+    Updates cluster_ids for prior entities that were re-clustered,
+    and inserts new entities from the current batch.
+    """
+    sql = (
+        f"-- Update cluster_ids for prior entities that were re-clustered\n"
+        f"UPDATE `{params.canonical_table}` ci\n"
+        f"SET {CLUSTER_ID} = cl.{CLUSTER_ID}\n"
+        f"FROM `{params.cluster_table}` cl\n"
+        f"WHERE ci.{ENTITY_UID} = cl.{ENTITY_UID}\n"
+        f"  AND ci.{CLUSTER_ID} != cl.{CLUSTER_ID};\n"
+        f"\n"
+        f"-- Insert new entities from current batch\n"
+        f"INSERT INTO `{params.canonical_table}`\n"
+        f"SELECT f.*, cl.{CLUSTER_ID}\n"
+        f"FROM `{params.source_table}` f\n"
+        f"JOIN `{params.cluster_table}` cl USING ({ENTITY_UID})\n"
+        f"WHERE f.{ENTITY_UID} NOT IN "
+        f"(SELECT {ENTITY_UID} FROM `{params.canonical_table}`);"
+    )
+    return SQLExpression.from_raw(sql)
+
+
 def build_cluster_quality_metrics_sql(
     params: ClusterMetricsParams,
 ) -> SQLExpression:
@@ -131,42 +293,42 @@ def build_cluster_quality_metrics_sql(
 
     lines.append("WITH cluster_stats AS (")
     lines.append("  SELECT")
-    lines.append("    cluster_id,")
+    lines.append(f"    {CLUSTER_ID},")
     lines.append("    COUNT(*) AS cluster_size,")
-    lines.append("    COUNT(DISTINCT source_name) AS source_count")
+    lines.append(f"    COUNT(DISTINCT {SOURCE_NAME}) AS source_count")
     lines.append(f"  FROM `{params.cluster_table}`")
-    lines.append("  GROUP BY cluster_id")
+    lines.append(f"  GROUP BY {CLUSTER_ID}")
     lines.append("),")
     lines.append("confidence_stats AS (")
     lines.append("  SELECT")
-    lines.append("    AVG(match_confidence) AS avg_match_confidence,")
-    lines.append("    MIN(match_confidence) AS min_match_confidence")
+    lines.append(f"    AVG({MATCH_CONFIDENCE}) AS {CLUSTER_METRIC_AVG_CONFIDENCE},")
+    lines.append(f"    MIN({MATCH_CONFIDENCE}) AS {CLUSTER_METRIC_MIN_CONFIDENCE}")
     lines.append(f"  FROM `{params.matches_table}`")
     lines.append(")")
     lines.append("SELECT")
-    lines.append("  COUNT(*) AS cluster_count,")
+    lines.append(f"  COUNT(*) AS {CLUSTER_METRIC_COUNT},")
     lines.append(
-        "  SUM(CASE WHEN cluster_size = 1 THEN 1 ELSE 0 END) AS singleton_count,"
+        f"  SUM(CASE WHEN cluster_size = 1 THEN 1 ELSE 0 END) AS {CLUSTER_METRIC_SINGLETON_COUNT},"
     )
     lines.append("  SAFE_DIVIDE(")
     lines.append(
         "    SUM(CASE WHEN cluster_size = 1 THEN 1 ELSE 0 END),"
     )
     lines.append("    COUNT(*)")
-    lines.append("  ) AS singleton_ratio,")
-    lines.append("  MAX(cluster_size) AS max_cluster_size,")
-    lines.append("  AVG(cluster_size) AS avg_cluster_size,")
+    lines.append(f"  ) AS {CLUSTER_METRIC_SINGLETON_RATIO},")
+    lines.append(f"  MAX(cluster_size) AS {CLUSTER_METRIC_MAX_SIZE},")
+    lines.append(f"  AVG(cluster_size) AS {CLUSTER_METRIC_AVG_SIZE},")
     lines.append(
-        "  APPROX_QUANTILES(cluster_size, 2)[OFFSET(1)] AS median_cluster_size,"
+        f"  APPROX_QUANTILES(cluster_size, 2)[OFFSET(1)] AS {CLUSTER_METRIC_MEDIAN_SIZE},"
     )
-    lines.append("  AVG(source_count) AS avg_source_diversity,")
-    lines.append("  cs.avg_match_confidence,")
-    lines.append("  cs.min_match_confidence,")
-    lines.append("  CURRENT_TIMESTAMP() AS computed_at")
+    lines.append(f"  AVG(source_count) AS {CLUSTER_METRIC_AVG_SOURCE_DIVERSITY},")
+    lines.append(f"  cs.{CLUSTER_METRIC_AVG_CONFIDENCE},")
+    lines.append(f"  cs.{CLUSTER_METRIC_MIN_CONFIDENCE},")
+    lines.append(f"  CURRENT_TIMESTAMP() AS {CLUSTER_METRIC_COMPUTED_AT}")
     lines.append("FROM cluster_stats")
     lines.append("CROSS JOIN confidence_stats cs")
     lines.append(
-        "GROUP BY cs.avg_match_confidence, cs.min_match_confidence"
+        f"GROUP BY cs.{CLUSTER_METRIC_AVG_CONFIDENCE}, cs.{CLUSTER_METRIC_MIN_CONFIDENCE}"
     )
 
     return SQLExpression.from_raw("\n".join(lines))

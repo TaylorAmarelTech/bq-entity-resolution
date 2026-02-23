@@ -229,13 +229,22 @@ class TermFrequencyConfig(BaseModel):
 
 
 class ComparisonDef(BaseModel):
-    """A comparison between two columns using a registered method."""
+    """A comparison between two columns using a registered method.
 
-    left: str
-    right: str
-    method: str  # exact, levenshtein, jaro_winkler, cosine_similarity, etc.
+    Can be defined inline or reference a pool entry via ``ref``.
+    When ``ref`` is set, the comparison inherits all fields from the pool
+    entry.  Any additional fields set alongside ``ref`` act as overrides
+    (e.g. ``ref: email_exact, weight: 1.5`` to override the pool weight
+    for a specific tier).
+    """
+
+    ref: Optional[str] = None  # Pool reference name
+    left: str = ""
+    right: str = ""
+    method: str = ""  # exact, levenshtein, jaro_winkler, cosine_similarity, etc.
     params: dict[str, Any] = Field(default_factory=dict)
     weight: float = 1.0
+    weight_mode: Literal["manual", "auto", "profile"] = "manual"
     levels: Optional[list[ComparisonLevelDef]] = None  # multi-level outcomes for F-S
     tf_adjustment: Optional[TermFrequencyConfig] = None  # term frequency adjustment
 
@@ -338,11 +347,42 @@ class ClusteringConfig(BaseModel):
     min_cluster_confidence: float = 0.0
 
 
+class FieldMergeStrategy(BaseModel):
+    """Per-field strategy for golden record assembly.
+
+    Used when canonical_selection.method = 'field_merge'.
+    Each field can independently choose which record's value to pick.
+
+    Strategies:
+        most_complete:    Value from the record with the most non-null fields.
+        most_recent:      Value from the most recently updated record.
+        source_priority:  Value from the highest-priority source.
+        most_common:      Most frequently occurring non-null value (majority vote).
+        weighted_vote:    Value with the highest recency-weighted vote count.
+                          Uses exponential time decay (configurable via decay_rate).
+    """
+
+    column: str
+    strategy: Literal[
+        "most_complete", "most_recent", "source_priority",
+        "most_common", "weighted_vote",
+    ] = "most_complete"
+    source_priority: list[str] = Field(default_factory=list)
+    decay_rate: float = 0.01  # Daily decay rate for weighted_vote strategy
+
+
 class CanonicalSelectionConfig(BaseModel):
     """How to elect the canonical record within a cluster."""
 
-    method: Literal["completeness", "recency", "source_priority"] = "completeness"
+    method: Literal[
+        "completeness", "recency", "source_priority", "field_merge"
+    ] = "completeness"
     source_priority: list[str] = Field(default_factory=list)
+    field_strategies: list[FieldMergeStrategy] = Field(default_factory=list)
+    default_field_strategy: Literal[
+        "most_complete", "most_recent", "source_priority",
+        "most_common", "weighted_vote",
+    ] = "most_complete"
 
 
 class AuditTrailConfig(BaseModel):
@@ -451,15 +491,22 @@ class ScaleConfig(BaseModel):
     """Scale optimizations for high-volume processing (5-10M+ records/day).
 
     All fields are opt-in (off by default) to preserve backwards compatibility.
+    Clustering columns control BigQuery CLUSTER BY clauses on generated tables.
     """
 
     max_bytes_billed: Optional[int] = None  # Safety cap per query (bytes)
+    staging_clustering: list[str] = Field(
+        default_factory=lambda: ["entity_uid"]
+    )
     featured_table_clustering: list[str] = Field(default_factory=list)
     candidates_clustering: list[str] = Field(
         default_factory=lambda: ["l_entity_uid"]
     )
     matches_clustering: list[str] = Field(
         default_factory=lambda: ["l_entity_uid", "r_entity_uid"]
+    )
+    canonical_index_clustering: list[str] = Field(
+        default_factory=lambda: ["entity_uid"]
     )
     checkpoint_enabled: bool = False
 
@@ -478,13 +525,48 @@ class PipelineConfig(BaseModel):
         default_factory=FeatureEngineeringConfig
     )
     embeddings: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    comparison_pool: dict[str, ComparisonDef] = Field(default_factory=dict)
     matching_tiers: list[MatchingTierConfig]
+    global_hard_negatives: list[HardNegativeDef] = Field(default_factory=list)
+    global_soft_signals: list[SoftSignalDef] = Field(default_factory=list)
     reconciliation: ReconciliationConfig = Field(default_factory=ReconciliationConfig)
     incremental: IncrementalConfig = Field(default_factory=IncrementalConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)  # global default
     scale: ScaleConfig = Field(default_factory=lambda: ScaleConfig())
     link_type: Literal["link_and_dedupe", "dedupe_only", "link_only"] = "link_and_dedupe"
+
+    @model_validator(mode="after")
+    def _resolve_comparison_refs(self) -> "PipelineConfig":
+        """Resolve comparison pool references in tier comparisons.
+
+        When a ComparisonDef has ``ref`` set, it is resolved against
+        the ``comparison_pool`` dict.  Any fields set alongside ``ref``
+        act as tier-level overrides (e.g. weight).
+        """
+        for tier in self.matching_tiers:
+            resolved: list[ComparisonDef] = []
+            for comp in tier.comparisons:
+                if comp.ref:
+                    pool_entry = self.comparison_pool.get(comp.ref)
+                    if not pool_entry:
+                        raise ValueError(
+                            f"Tier '{tier.name}' references unknown "
+                            f"comparison_pool ref '{comp.ref}'. "
+                            f"Available: {sorted(self.comparison_pool.keys())}"
+                        )
+                    # Merge: pool base + any tier-level overrides
+                    overrides = comp.model_dump(
+                        exclude_defaults=True, exclude={"ref"}
+                    )
+                    merged_data = pool_entry.model_dump()
+                    merged_data.update(overrides)
+                    merged_data.pop("ref", None)  # resolved refs don't carry ref
+                    resolved.append(ComparisonDef(**merged_data))
+                else:
+                    resolved.append(comp)
+            tier.comparisons = resolved
+        return self
 
     @model_validator(mode="after")
     def unique_tier_names(self) -> "PipelineConfig":
@@ -524,7 +606,63 @@ class PipelineConfig(BaseModel):
         """Return only enabled matching tiers in order."""
         return [t for t in self.matching_tiers if t.enabled]
 
+    def effective_hard_negatives(self, tier: MatchingTierConfig) -> list[HardNegativeDef]:
+        """Return combined global + tier-level hard negatives for a tier.
+
+        Global hard negatives are applied first, then tier-specific ones.
+        This enables defining disqualification rules once and reusing
+        across all tiers.
+        """
+        return list(self.global_hard_negatives) + list(tier.hard_negatives)
+
+    def effective_soft_signals(self, tier: MatchingTierConfig) -> list[SoftSignalDef]:
+        """Return combined global + tier-level soft signals for a tier.
+
+        Global soft signals are applied first, then tier-specific ones.
+        """
+        return list(self.global_soft_signals) + list(tier.soft_signals)
+
+    def effective_training_config(self, tier: MatchingTierConfig) -> TrainingConfig:
+        """Return the effective training config for a tier.
+
+        Resolution order:
+        1. Tier-level training config (if method != "none")
+        2. Auto-retrain from label feedback (if enabled + auto_retrain)
+        3. Global training config
+        """
+        # Tier-level explicit training takes priority
+        if tier.training.method != "none":
+            return tier.training
+
+        # Auto-retrain: when label feedback is enabled and auto_retrain=True,
+        # wire the labels table as the training source for the next run
+        feedback = tier.active_learning.label_feedback
+        if feedback.enabled and feedback.auto_retrain:
+            from bq_entity_resolution.naming import labels_table
+            return TrainingConfig(
+                method="labeled",
+                labeled_pairs_table=labels_table(self),
+            )
+
+        # Fall back to global training config
+        return self.training
+
     def fq_table(self, dataset_attr: str, suffix: str) -> str:
         """Build a fully-qualified BigQuery table name."""
         dataset = getattr(self.project, dataset_attr)
         return f"{self.project.bq_project}.{dataset}.{suffix}"
+
+    def to_yaml(self) -> str:
+        """Serialize the full config to YAML for inspection and editing.
+
+        Enables the workflow: quick_config() -> inspect -> tweak -> reload.
+        """
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError(
+                "PyYAML is required for to_yaml(). Install with: pip install pyyaml"
+            )
+
+        data = self.model_dump(exclude_defaults=True, exclude_none=True)
+        return yaml.dump(data, default_flow_style=False, sort_keys=False, width=100)

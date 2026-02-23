@@ -2,9 +2,27 @@
 
 import pytest
 
-from bq_entity_resolution.blocking.engine import BlockingEngine
 from bq_entity_resolution.config.schema import PipelineConfig
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.blocking import (
+    BlockingParams,
+    BlockingPath,
+    build_blocking_sql,
+)
+
+
+def _make_blocking_params(link_type=None, cross_batch=False):
+    """Helper to create blocking params with a single path."""
+    return BlockingParams(
+        target_table="proj.silver.candidates_exact",
+        source_table="proj.silver.featured",
+        blocking_paths=[
+            BlockingPath(index=0, keys=["bk_name_zip"]),
+        ],
+        tier_name="exact",
+        link_type=link_type,
+        cross_batch=cross_batch,
+        canonical_table="proj.gold.canonical_index" if cross_batch else None,
+    )
 
 
 def test_default_link_type(sample_config):
@@ -12,62 +30,51 @@ def test_default_link_type(sample_config):
     assert sample_config.link_type == "link_and_dedupe"
 
 
-def test_link_and_dedupe_no_source_filter(sample_config):
+def test_link_and_dedupe_no_source_filter():
     """link_and_dedupe generates no source_name filter."""
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    sql = engine.generate_candidates_sql(tier, tier_index=0)
+    params = _make_blocking_params(link_type="link_and_dedupe")
+    sql = build_blocking_sql(params).render()
     assert "l.source_name = r.source_name" not in sql
     assert "l.source_name != r.source_name" not in sql
 
 
-def test_dedupe_only_same_source_filter(sample_config):
+def test_dedupe_only_same_source_filter():
     """dedupe_only adds AND l.source_name = r.source_name."""
-    sample_config.link_type = "dedupe_only"
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    sql = engine.generate_candidates_sql(tier, tier_index=0)
+    params = _make_blocking_params(link_type="dedupe_only")
+    sql = build_blocking_sql(params).render()
     assert "l.source_name = r.source_name" in sql
     assert "l.source_name != r.source_name" not in sql
 
 
-def test_link_only_different_source_filter(sample_config):
+def test_link_only_different_source_filter():
     """link_only adds AND l.source_name != r.source_name."""
-    sample_config.link_type = "link_only"
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    sql = engine.generate_candidates_sql(tier, tier_index=0)
+    params = _make_blocking_params(link_type="link_only")
+    sql = build_blocking_sql(params).render()
     assert "l.source_name != r.source_name" in sql
     assert "l.source_name = r.source_name" not in sql
 
 
-def test_link_type_applied_to_all_paths(sample_config):
+def test_link_type_applied_to_all_paths():
     """Link type filter applies to every blocking path."""
-    sample_config.link_type = "dedupe_only"
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    # fuzzy tier has one blocking path
-    tier = sample_config.matching_tiers[1]
+    params = BlockingParams(
+        target_table="proj.silver.candidates_fuzzy",
+        source_table="proj.silver.featured",
+        blocking_paths=[
+            BlockingPath(index=0, keys=["bk_name_zip"]),
+            BlockingPath(index=1, keys=["bk_email"]),
+        ],
+        tier_name="fuzzy",
+        link_type="dedupe_only",
+    )
+    sql = build_blocking_sql(params).render()
+    # Both paths should contain the filter
+    assert sql.count("l.source_name = r.source_name") >= 2
 
-    sql = engine.generate_candidates_sql(tier, tier_index=1)
-    assert "l.source_name = r.source_name" in sql
 
-
-def test_link_type_applied_to_cross_batch(sample_config):
+def test_link_type_applied_to_cross_batch():
     """Link type filter present in cross-batch section when enabled."""
-    sample_config.link_type = "link_only"
-    sample_config.matching_tiers[0].blocking.cross_batch = True
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    sql = engine.generate_candidates_sql(tier, tier_index=0)
+    params = _make_blocking_params(link_type="link_only", cross_batch=True)
+    sql = build_blocking_sql(params).render()
     # cross_path section should exist and contain source filter
     assert "cross_path_0" in sql
     assert "l.source_name != r.source_name" in sql
@@ -89,15 +96,10 @@ def test_link_type_invalid_value_rejected():
         )
 
 
-def test_link_type_passes_through_engine(sample_config):
-    """BlockingEngine passes link_type from config to template render."""
-    sample_config.link_type = "dedupe_only"
-    sql_gen = SQLGenerator()
-    engine = BlockingEngine(sample_config, sql_gen)
-    tier = sample_config.matching_tiers[0]
-
-    # The generated SQL should reflect the link_type
-    sql = engine.generate_candidates_sql(tier, tier_index=0)
+def test_link_type_passes_through_to_sql():
+    """Blocking SQL reflects the link_type filter."""
+    params = _make_blocking_params(link_type="dedupe_only")
+    sql = build_blocking_sql(params).render()
     # Confirm intra-batch has the filter
     assert "intra_path_0" in sql
     assert "l.source_name = r.source_name" in sql

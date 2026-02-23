@@ -37,6 +37,14 @@ def validate_comparison_columns_exist(config: PipelineConfig) -> None:
             if ss.left not in known:
                 errors.append(f"Tier '{tier.name}' soft_signal references unknown column '{ss.left}'")
 
+    # Global hard negatives / soft signals
+    for hn in config.global_hard_negatives:
+        if hn.left not in known:
+            errors.append(f"Global hard_negative references unknown column '{hn.left}'")
+    for ss in config.global_soft_signals:
+        if ss.left not in known:
+            errors.append(f"Global soft_signal references unknown column '{ss.left}'")
+
     if errors:
         raise ConfigurationError(
             "Column reference validation failed:\n  " + "\n  ".join(errors)
@@ -191,11 +199,142 @@ def validate_tf_columns_exist(config: PipelineConfig) -> None:
         )
 
 
+def validate_source_schema_alignment(config: PipelineConfig) -> None:
+    """Ensure all sources define the same column names for safe UNION ALL.
+
+    When multiple sources are UNION-ALLed during feature engineering,
+    they must share the same column set.  This validator catches schema
+    mismatches at config load time rather than at BigQuery runtime.
+    """
+    if len(config.sources) < 2:
+        return
+
+    reference = config.sources[0]
+    ref_names = {c.name for c in reference.columns}
+    errors: list[str] = []
+
+    for source in config.sources[1:]:
+        src_names = {c.name for c in source.columns}
+        missing = ref_names - src_names
+        extra = src_names - ref_names
+        if missing:
+            errors.append(
+                f"Source '{source.name}' missing columns present in "
+                f"'{reference.name}': {sorted(missing)}"
+            )
+        if extra:
+            errors.append(
+                f"Source '{source.name}' has extra columns not in "
+                f"'{reference.name}': {sorted(extra)}"
+            )
+
+    if errors:
+        raise ConfigurationError(
+            "Source schema alignment failed:\n  " + "\n  ".join(errors)
+        )
+
+
+def validate_comparison_methods_registered(config: PipelineConfig) -> None:
+    """Validate that all comparison/hard_negative/soft_signal method names are registered.
+
+    Catches typos like ``method: "levenstein"`` at config load time
+    instead of at SQL generation time.
+    """
+    from bq_entity_resolution.features.registry import FEATURE_FUNCTIONS
+    from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
+
+    known_comparison = set(COMPARISON_FUNCTIONS.keys())
+    known_feature = set(FEATURE_FUNCTIONS.keys())
+    errors: list[str] = []
+
+    # Feature function names
+    for group in config.feature_engineering.all_groups():
+        if not group.enabled:
+            continue
+        for feat in group.features:
+            if feat.sql:
+                continue  # raw SQL override — no function to validate
+            if feat.function not in known_feature:
+                errors.append(
+                    f"Feature '{feat.name}' references unknown function "
+                    f"'{feat.function}'. Registered functions: "
+                    f"{sorted(known_feature)}"
+                )
+
+    for feat in config.feature_engineering.custom_features:
+        if feat.sql:
+            continue
+        if feat.function not in known_feature:
+            errors.append(
+                f"Custom feature '{feat.name}' references unknown function "
+                f"'{feat.function}'. Registered functions: "
+                f"{sorted(known_feature)}"
+            )
+
+    # Blocking key function names
+    for bk in config.feature_engineering.blocking_keys:
+        if bk.function not in known_feature:
+            errors.append(
+                f"Blocking key '{bk.name}' references unknown function "
+                f"'{bk.function}'. Registered functions: "
+                f"{sorted(known_feature)}"
+            )
+
+    # Comparison method names
+    for tier in config.enabled_tiers():
+        for comp in tier.comparisons:
+            if comp.method not in known_comparison:
+                errors.append(
+                    f"Tier '{tier.name}' comparison '{comp.left}/{comp.right}' "
+                    f"references unknown method '{comp.method}'. "
+                    f"Registered methods: {sorted(known_comparison)}"
+                )
+            # Multi-level comparisons
+            if comp.levels:
+                for lvl in comp.levels:
+                    if lvl.method and lvl.method not in known_comparison:
+                        errors.append(
+                            f"Tier '{tier.name}' comparison '{comp.left}/{comp.right}' "
+                            f"level '{lvl.label}' references unknown method "
+                            f"'{lvl.method}'. "
+                            f"Registered methods: {sorted(known_comparison)}"
+                        )
+
+        # Hard negative methods
+        for hn in tier.hard_negatives:
+            if hn.sql:
+                continue  # raw SQL override
+            if hn.method not in known_comparison:
+                errors.append(
+                    f"Tier '{tier.name}' hard_negative references unknown method "
+                    f"'{hn.method}'. "
+                    f"Registered methods: {sorted(known_comparison)}"
+                )
+
+        # Soft signal methods
+        for ss in tier.soft_signals:
+            if ss.sql:
+                continue  # raw SQL override
+            if ss.method not in known_comparison:
+                errors.append(
+                    f"Tier '{tier.name}' soft_signal references unknown method "
+                    f"'{ss.method}'. "
+                    f"Registered methods: {sorted(known_comparison)}"
+                )
+
+    if errors:
+        raise ConfigurationError(
+            "Method/function registry validation failed:\n  " + "\n  ".join(errors)
+        )
+
+
 def validate_full(config: PipelineConfig) -> None:
     """Run all cross-field validations."""
+    validate_source_schema_alignment(config)
     validate_feature_inputs_exist(config)
     validate_feature_dependencies(config)
     validate_comparison_columns_exist(config)
     validate_comparison_weights(config)
     validate_fellegi_sunter_config(config)
     validate_tf_columns_exist(config)
+    validate_comparison_methods_registered(config)

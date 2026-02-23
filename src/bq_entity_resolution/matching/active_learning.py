@@ -22,7 +22,12 @@ from bq_entity_resolution.naming import (
     matches_table,
     review_queue_table as default_review_queue_table,
 )
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.active_learning import (
+    ActiveLearningParams,
+    IngestLabelsParams,
+    build_active_learning_sql,
+    build_ingest_labels_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +35,8 @@ logger = logging.getLogger(__name__)
 class ActiveLearningEngine:
     """Generates SQL for active learning review queue and label ingestion."""
 
-    def __init__(self, config: PipelineConfig, sql_gen: SQLGenerator | None = None):
+    def __init__(self, config: PipelineConfig):
         self.config = config
-        self.sql_gen = sql_gen or SQLGenerator()
 
     def generate_review_queue_sql(
         self, tier: MatchingTierConfig
@@ -47,17 +51,15 @@ class ActiveLearningEngine:
             self.config, tier.name
         )
 
-        return self.sql_gen.render(
-            "matching/active_learning_queue.sql.j2",
+        params = ActiveLearningParams(
             review_table=review_table,
             matches_table=matches_table(self.config, tier.name),
-            candidates_table=candidates_table(self.config, tier.name),
-            source_table=featured_table(self.config),
             queue_size=al.queue_size,
-            threshold=tier.threshold,
             uncertainty_window=al.uncertainty_window,
             is_fellegi_sunter=tier.threshold.method == "fellegi_sunter",
+            min_score=tier.threshold.min_score,
         )
+        return build_active_learning_sql(params).render()
 
     def generate_label_ingestion_sql(self, tier: MatchingTierConfig) -> str:
         """Generate SQL to ingest human labels from the review queue into the labels table."""
@@ -70,12 +72,12 @@ class ActiveLearningEngine:
             or default_labels_table(self.config)
         )
 
-        return self.sql_gen.render(
-            "matching/ingest_labels.sql.j2",
+        params = IngestLabelsParams(
             labels_table=labels_tbl,
             review_queue_table=review_table,
             tier_name=tier.name,
         )
+        return build_ingest_labels_sql(params).render()
 
     def generate_label_count_sql(self, tier: MatchingTierConfig) -> str:
         """Generate SQL to count available labels for a tier."""

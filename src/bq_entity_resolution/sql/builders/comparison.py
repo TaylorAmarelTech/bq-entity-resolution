@@ -12,6 +12,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bq_entity_resolution.columns import (
+    ENTITY_UID,
+    LEFT_ENTITY_UID,
+    MATCH_CONFIDENCE,
+    MATCH_DETAIL,
+    MATCH_TIER_NAME,
+    MATCH_TIER_PRIORITY,
+    MATCH_TOTAL_SCORE,
+    MATCHED_AT,
+    RIGHT_ENTITY_UID,
+    TERM_FREQUENCY_COLUMN,
+    TERM_FREQUENCY_RATIO,
+    TERM_FREQUENCY_VALUE,
+    match_log_weight_column,
+    match_score_column,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
 
 
@@ -106,9 +122,9 @@ def _build_tf_joins(comparisons: list[ComparisonDef], tf_table: str | None) -> l
         if comp.tf_enabled:
             alias = f"tf_{comp.name}"
             lines.append(f"  LEFT JOIN `{tf_table}` {alias}")
-            lines.append(f"    ON {alias}.tf_col = '{comp.tf_column}'")
+            lines.append(f"    ON {alias}.{TERM_FREQUENCY_COLUMN} = '{comp.tf_column}'")
             lines.append(
-                f"    AND {alias}.tf_value = CAST(l.{comp.tf_column} AS STRING)"
+                f"    AND {alias}.{TERM_FREQUENCY_VALUE} = CAST(l.{comp.tf_column} AS STRING)"
             )
     return lines
 
@@ -134,15 +150,15 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
     parts.append("")
     parts.append("WITH scored AS (")
     parts.append("  SELECT")
-    parts.append("    c.l_entity_uid,")
-    parts.append("    c.r_entity_uid,")
+    parts.append(f"    c.{LEFT_ENTITY_UID},")
+    parts.append(f"    c.{RIGHT_ENTITY_UID},")
     parts.append("")
 
     # Individual comparison scores
     for comp in params.comparisons:
         parts.append(
             f"    CASE WHEN {comp.sql_expr} THEN 1.0 ELSE 0.0 END "
-            f"AS score_{comp.name},"
+            f"AS {match_score_column(comp.name)},"
         )
 
     parts.append("")
@@ -155,7 +171,7 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
             score_terms.append(
                 f"      CASE WHEN {comp.sql_expr}\n"
                 f"        THEN {comp.weight} * LOG(1.0 / GREATEST("
-                f"COALESCE(tf_{comp.name}.tf_frequency, {comp.tf_minimum_u}), "
+                f"COALESCE(tf_{comp.name}.{TERM_FREQUENCY_RATIO}, {comp.tf_minimum_u}), "
                 f"{comp.tf_minimum_u}))\n"
                 f"        ELSE 0.0\n"
                 f"      END"
@@ -183,16 +199,16 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
                 f"THEN {hn.penalty} ELSE 0.0 END"
             )
 
-    parts.append("    ) AS total_score")
+    parts.append(f"    ) AS {MATCH_TOTAL_SCORE}")
     parts.append("")
 
     # FROM clause with joins
     parts.append(f"  FROM `{params.candidates_table}` c")
     parts.append(
-        f"  INNER JOIN `{params.source_table}` l ON c.l_entity_uid = l.entity_uid"
+        f"  INNER JOIN `{params.source_table}` l ON c.{LEFT_ENTITY_UID} = l.{ENTITY_UID}"
     )
     parts.append(
-        f"  INNER JOIN `{params.source_table}` r ON c.r_entity_uid = r.entity_uid"
+        f"  INNER JOIN `{params.source_table}` r ON c.{RIGHT_ENTITY_UID} = r.{ENTITY_UID}"
     )
 
     # TF joins
@@ -206,30 +222,32 @@ def build_sum_scoring_sql(params: SumScoringParams) -> SQLExpression:
 
     # Final SELECT with threshold
     parts.append("SELECT")
-    parts.append("  l_entity_uid,")
-    parts.append("  r_entity_uid,")
-    parts.append("  total_score,")
-    parts.append(f"  {params.tier_index} AS tier_priority,")
-    parts.append(f"  '{params.tier_name}' AS tier_name,")
+    parts.append(f"  {LEFT_ENTITY_UID},")
+    parts.append(f"  {RIGHT_ENTITY_UID},")
+    parts.append(f"  {MATCH_TOTAL_SCORE},")
+    parts.append(f"  {params.tier_index} AS {MATCH_TIER_PRIORITY},")
+    parts.append(f"  '{params.tier_name}' AS {MATCH_TIER_NAME},")
 
     if params.confidence is not None:
-        parts.append(f"  {params.confidence} AS match_confidence,")
+        parts.append(f"  {params.confidence} AS {MATCH_CONFIDENCE},")
     else:
         parts.append(
-            f"  ROUND(total_score / NULLIF({params.max_possible_score}, 0), 4) "
-            f"AS match_confidence,"
+            f"  ROUND({MATCH_TOTAL_SCORE} / NULLIF({params.max_possible_score}, 0), 4) "
+            f"AS {MATCH_CONFIDENCE},"
         )
 
     for comp in params.comparisons:
-        parts.append(f"  score_{comp.name},")
+        parts.append(f"  {match_score_column(comp.name)},")
 
     if params.audit_trail_enabled:
-        struct_fields = ", ".join(f"score_{c.name}" for c in params.comparisons)
-        parts.append(f"  TO_JSON_STRING(STRUCT({struct_fields})) AS match_detail,")
+        struct_fields = ", ".join(
+            match_score_column(c.name) for c in params.comparisons
+        )
+        parts.append(f"  TO_JSON_STRING(STRUCT({struct_fields})) AS {MATCH_DETAIL},")
 
-    parts.append("  CURRENT_TIMESTAMP() AS matched_at")
+    parts.append(f"  CURRENT_TIMESTAMP() AS {MATCHED_AT}")
     parts.append("FROM scored")
-    parts.append(f"WHERE total_score >= {params.threshold.min_score}")
+    parts.append(f"WHERE {MATCH_TOTAL_SCORE} >= {params.threshold.min_score}")
 
     return SQLExpression.from_raw("\n".join(parts))
 
@@ -247,7 +265,7 @@ def _build_fs_level_case(
                 lines.append(
                     f"      WHEN {level.sql_expr} THEN\n"
                     f"        LOG({level.m}) / LOG(2) - LOG(GREATEST({level.u}, "
-                    f"COALESCE(tf_{comp.name}.tf_frequency, {comp.tf_minimum_u}))) / LOG(2)"
+                    f"COALESCE(tf_{comp.name}.{TERM_FREQUENCY_RATIO}, {comp.tf_minimum_u}))) / LOG(2)"
                 )
             else:
                 lines.append(f"      WHEN {level.sql_expr} THEN {level.log_weight}")
@@ -271,14 +289,14 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
     parts.append("")
     parts.append("WITH scored AS (")
     parts.append("  SELECT")
-    parts.append("    c.l_entity_uid,")
-    parts.append("    c.r_entity_uid,")
+    parts.append(f"    c.{LEFT_ENTITY_UID},")
+    parts.append(f"    c.{RIGHT_ENTITY_UID},")
     parts.append("")
 
     # Per-comparison level assignment and log-weight
     for comp in params.comparisons:
         case_expr = _build_fs_level_case(comp, params.tf_table)
-        parts.append(f"    {case_expr} AS log_weight_{comp.name},")
+        parts.append(f"    {case_expr} AS {match_log_weight_column(comp.name)},")
 
     parts.append("")
 
@@ -305,16 +323,16 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
                 f"THEN {hn.penalty} ELSE 0.0 END"
             )
 
-    parts.append("    ) AS total_score")
+    parts.append(f"    ) AS {MATCH_TOTAL_SCORE}")
     parts.append("")
 
     # FROM clause
     parts.append(f"  FROM `{params.candidates_table}` c")
     parts.append(
-        f"  INNER JOIN `{params.source_table}` l ON c.l_entity_uid = l.entity_uid"
+        f"  INNER JOIN `{params.source_table}` l ON c.{LEFT_ENTITY_UID} = l.{ENTITY_UID}"
     )
     parts.append(
-        f"  INNER JOIN `{params.source_table}` r ON c.r_entity_uid = r.entity_uid"
+        f"  INNER JOIN `{params.source_table}` r ON c.{RIGHT_ENTITY_UID} = r.{ENTITY_UID}"
     )
 
     # TF joins
@@ -328,36 +346,36 @@ def build_fellegi_sunter_sql(params: FellegiSunterParams) -> SQLExpression:
 
     # Final SELECT
     parts.append("SELECT")
-    parts.append("  l_entity_uid,")
-    parts.append("  r_entity_uid,")
-    parts.append("  total_score,")
-    parts.append(f"  {params.tier_index} AS tier_priority,")
-    parts.append(f"  '{params.tier_name}' AS tier_name,")
+    parts.append(f"  {LEFT_ENTITY_UID},")
+    parts.append(f"  {RIGHT_ENTITY_UID},")
+    parts.append(f"  {MATCH_TOTAL_SCORE},")
+    parts.append(f"  {params.tier_index} AS {MATCH_TIER_PRIORITY},")
+    parts.append(f"  '{params.tier_name}' AS {MATCH_TIER_NAME},")
 
     # Match confidence with overflow clamping
     parts.append("  ROUND(CASE")
-    parts.append("    WHEN total_score > 50 THEN 1.0")
-    parts.append("    WHEN total_score < -50 THEN 0.0")
+    parts.append(f"    WHEN {MATCH_TOTAL_SCORE} > 50 THEN 1.0")
+    parts.append(f"    WHEN {MATCH_TOTAL_SCORE} < -50 THEN 0.0")
     parts.append(
-        "    ELSE SAFE_DIVIDE(POW(2.0, total_score), 1.0 + POW(2.0, total_score))"
+        f"    ELSE SAFE_DIVIDE(POW(2.0, {MATCH_TOTAL_SCORE}), 1.0 + POW(2.0, {MATCH_TOTAL_SCORE}))"
     )
-    parts.append("  END, 4) AS match_confidence,")
+    parts.append(f"  END, 4) AS {MATCH_CONFIDENCE},")
 
     for comp in params.comparisons:
-        parts.append(f"  log_weight_{comp.name},")
+        parts.append(f"  {match_log_weight_column(comp.name)},")
 
     if params.audit_trail_enabled:
         struct_fields = ", ".join(
-            f"log_weight_{c.name}" for c in params.comparisons
+            match_log_weight_column(c.name) for c in params.comparisons
         )
-        parts.append(f"  TO_JSON_STRING(STRUCT({struct_fields})) AS match_detail,")
+        parts.append(f"  TO_JSON_STRING(STRUCT({struct_fields})) AS {MATCH_DETAIL},")
 
-    parts.append("  CURRENT_TIMESTAMP() AS matched_at")
+    parts.append(f"  CURRENT_TIMESTAMP() AS {MATCHED_AT}")
     parts.append("FROM scored")
 
     if params.threshold.match_threshold is not None:
-        parts.append(f"WHERE total_score >= {params.threshold.match_threshold}")
+        parts.append(f"WHERE {MATCH_TOTAL_SCORE} >= {params.threshold.match_threshold}")
     else:
-        parts.append(f"WHERE total_score >= {params.threshold.min_score}")
+        parts.append(f"WHERE {MATCH_TOTAL_SCORE} >= {params.threshold.min_score}")
 
     return SQLExpression.from_raw("\n".join(parts))

@@ -118,13 +118,13 @@ def test_term_frequency_builder_executes(backend):
     backend.execute(expr.render())
 
     rows = backend.execute_and_fetch(
-        "SELECT * FROM tf_stats ORDER BY tf_value"
+        "SELECT * FROM tf_stats ORDER BY term_frequency_value"
     )
     # Doe (1), Johnson (1), Smith (3) => frequencies: 0.2, 0.2, 0.6
     assert len(rows) == 3
-    smith_row = [r for r in rows if r["tf_value"] == "Smith"][0]
-    assert smith_row["value_count"] == 3
-    assert abs(smith_row["tf_frequency"] - 0.6) < 0.01
+    smith_row = [r for r in rows if r["term_frequency_value"] == "Smith"][0]
+    assert smith_row["term_frequency_count"] == 3
+    assert abs(smith_row["term_frequency_ratio"] - 0.6) < 0.01
 
 
 def test_blocking_builder_executes(backend):
@@ -170,8 +170,8 @@ def test_sum_scoring_builder_executes(backend):
     backend.execute("""
         CREATE TABLE cand_sum AS
         SELECT
-            l.entity_uid AS l_entity_uid,
-            r.entity_uid AS r_entity_uid
+            l.entity_uid AS left_entity_uid,
+            r.entity_uid AS right_entity_uid
         FROM featured l
         INNER JOIN featured r
             ON l.entity_uid < r.entity_uid
@@ -204,13 +204,13 @@ def test_sum_scoring_builder_executes(backend):
     backend.execute(expr.render())
 
     rows = backend.execute_and_fetch(
-        "SELECT * FROM matches_sum ORDER BY total_score DESC"
+        "SELECT * FROM matches_sum ORDER BY match_total_score DESC"
     )
     assert len(rows) > 0
     # All matched pairs should have score >= 1.0
     for row in rows:
-        assert row["total_score"] >= 1.0
-        assert row["tier_name"] == "sum_test"
+        assert row["match_total_score"] >= 1.0
+        assert row["match_tier_name"] == "sum_test"
         assert row["match_confidence"] is not None
 
 
@@ -220,8 +220,8 @@ def test_fs_scoring_builder_executes(backend):
     backend.execute("""
         CREATE TABLE cand_fs AS
         SELECT
-            l.entity_uid AS l_entity_uid,
-            r.entity_uid AS r_entity_uid
+            l.entity_uid AS left_entity_uid,
+            r.entity_uid AS right_entity_uid
         FROM featured l
         INNER JOIN featured r
             ON l.entity_uid < r.entity_uid
@@ -277,12 +277,12 @@ def test_fs_scoring_builder_executes(backend):
     backend.execute(expr.render())
 
     rows = backend.execute_and_fetch(
-        "SELECT * FROM matches_fs ORDER BY total_score DESC"
+        "SELECT * FROM matches_fs ORDER BY match_total_score DESC"
     )
     assert len(rows) > 0
     for row in rows:
-        assert row["total_score"] >= -10.0
-        assert row["tier_name"] == "fs_test"
+        assert row["match_total_score"] >= -10.0
+        assert row["match_tier_name"] == "fs_test"
         assert row["match_confidence"] is not None
         assert 0.0 <= row["match_confidence"] <= 1.0
 
@@ -292,12 +292,12 @@ def test_active_learning_builder_executes(backend):
     # Create a matches table first
     backend.execute("""
         CREATE TABLE al_matches (
-            l_entity_uid VARCHAR,
-            r_entity_uid VARCHAR,
-            total_score DOUBLE,
+            left_entity_uid VARCHAR,
+            right_entity_uid VARCHAR,
+            match_total_score DOUBLE,
             match_confidence DOUBLE,
-            tier_priority INTEGER,
-            tier_name VARCHAR,
+            match_tier_priority INTEGER,
+            match_tier_name VARCHAR,
             matched_at TIMESTAMP
         )
     """)
@@ -319,11 +319,11 @@ def test_active_learning_builder_executes(backend):
     backend.execute(expr.render())
 
     rows = backend.execute_and_fetch(
-        "SELECT * FROM review_queue ORDER BY uncertainty ASC"
+        "SELECT * FROM review_queue ORDER BY match_uncertainty ASC"
     )
     # e2-e4 pair (confidence 0.55) is closest to 0.5
     assert len(rows) > 0
-    assert rows[0]["uncertainty"] < rows[-1]["uncertainty"] or len(rows) == 1
+    assert rows[0]["match_uncertainty"] < rows[-1]["match_uncertainty"] or len(rows) == 1
 
 
 def test_end_to_end_pipeline_builders(backend):
@@ -376,16 +376,16 @@ def test_end_to_end_pipeline_builders(backend):
         UPDATE e2e_clusters SET cluster_id = (
             SELECT LEAST(cl.cluster_id, cr.cluster_id)
             FROM e2e_matches m
-            JOIN e2e_clusters cl ON m.l_entity_uid = cl.entity_uid
-            JOIN e2e_clusters cr ON m.r_entity_uid = cr.entity_uid
-            WHERE e2e_clusters.entity_uid = m.l_entity_uid
-               OR e2e_clusters.entity_uid = m.r_entity_uid
+            JOIN e2e_clusters cl ON m.left_entity_uid = cl.entity_uid
+            JOIN e2e_clusters cr ON m.right_entity_uid = cr.entity_uid
+            WHERE e2e_clusters.entity_uid = m.left_entity_uid
+               OR e2e_clusters.entity_uid = m.right_entity_uid
             LIMIT 1
         )
         WHERE entity_uid IN (
-            SELECT l_entity_uid FROM e2e_matches
+            SELECT left_entity_uid FROM e2e_matches
             UNION
-            SELECT r_entity_uid FROM e2e_matches
+            SELECT right_entity_uid FROM e2e_matches
         )
     """)
 

@@ -27,6 +27,7 @@ from bq_entity_resolution.stages.reconciliation import (
     ClusterQualityStage,
 )
 from bq_entity_resolution.stages.active_learning import ActiveLearningStage
+from bq_entity_resolution.stages.label_ingestion import LabelIngestionStage
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,15 @@ def build_pipeline_dag(config: PipelineConfig) -> StageDAG:
 
         # Active learning per tier (if enabled)
         if getattr(tier.active_learning, "enabled", False):
-            stages.append(ActiveLearningStage(tier, i, config))
+            al_stage = ActiveLearningStage(tier, config)
+            stages.append(al_stage)
+
+            # Label ingestion: ingest human labels from review queue
+            if getattr(tier.active_learning.label_feedback, "enabled", False):
+                li_stage = LabelIngestionStage(tier, config)
+                stages.append(li_stage)
+                # Ingestion depends on review queue being created
+                explicit_edges[li_stage.name] = [al_stage.name]
 
     # 5. Reconciliation
     stages.append(ClusteringStage(config))

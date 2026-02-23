@@ -27,8 +27,8 @@ def test_basic_staging():
     assert "first_name" in sql
     assert "last_name" in sql
     assert "email" in sql
-    assert "_source_updated_at" in sql
-    assert "_pipeline_loaded_at" in sql
+    assert "source_updated_at" in sql
+    assert "pipeline_loaded_at" in sql
 
 
 def test_staging_with_watermark():

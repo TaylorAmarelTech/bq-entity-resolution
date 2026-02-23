@@ -1,15 +1,11 @@
 """Tests for label ingestion and retrain feedback loop."""
 
-import pytest
-
 from bq_entity_resolution.config.schema import (
     ActiveLearningConfig,
-    ComparisonLevelDef,
     LabelFeedbackConfig,
 )
 from bq_entity_resolution.matching.active_learning import ActiveLearningEngine
 from bq_entity_resolution.matching.parameters import ParameterEstimator
-from bq_entity_resolution.sql.generator import SQLGenerator
 
 
 # ---------------------------------------------------------------
@@ -63,8 +59,7 @@ def test_active_learning_with_feedback():
 
 def test_label_ingestion_sql_generates(sample_config):
     """Label ingestion SQL renders successfully."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.active_learning.enabled = True
@@ -79,8 +74,7 @@ def test_label_ingestion_sql_generates(sample_config):
 
 def test_label_ingestion_uses_custom_table(sample_config):
     """Custom feedback table is used when configured."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.active_learning.enabled = True
@@ -95,8 +89,7 @@ def test_label_ingestion_uses_custom_table(sample_config):
 
 def test_label_ingestion_includes_tier_name(sample_config):
     """Ingested labels are tagged with the tier name."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.active_learning.enabled = True
@@ -112,8 +105,7 @@ def test_label_ingestion_includes_tier_name(sample_config):
 
 def test_label_count_sql(sample_config):
     """Label count SQL generates correct query."""
-    sql_gen = SQLGenerator()
-    engine = ActiveLearningEngine(sample_config, sql_gen)
+    engine = ActiveLearningEngine(sample_config)
 
     tier = sample_config.matching_tiers[0]
     tier.active_learning.enabled = True
@@ -131,8 +123,7 @@ def test_label_count_sql(sample_config):
 
 def test_reestimation_sql_generates(sample_config):
     """Reestimation SQL renders from labels table."""
-    sql_gen = SQLGenerator()
-    estimator = ParameterEstimator(sample_config, sql_gen)
+    estimator = ParameterEstimator(sample_config)
 
     tier = sample_config.matching_tiers[1]  # fuzzy tier
     sql = estimator.generate_reestimation_sql(tier)
@@ -141,8 +132,7 @@ def test_reestimation_sql_generates(sample_config):
 
 def test_reestimation_custom_labels_table(sample_config):
     """Reestimation uses custom labels table when specified."""
-    sql_gen = SQLGenerator()
-    estimator = ParameterEstimator(sample_config, sql_gen)
+    estimator = ParameterEstimator(sample_config)
 
     tier = sample_config.matching_tiers[1]
     sql = estimator.generate_reestimation_sql(

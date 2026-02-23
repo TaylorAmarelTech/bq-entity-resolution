@@ -12,7 +12,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from bq_entity_resolution.exceptions import WatermarkError
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.watermark import (
+    build_create_watermark_table_sql,
+    build_read_watermark_sql,
+    build_update_watermark_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +37,14 @@ class WatermarkManager:
         self,
         bq_client: Any,  # BigQueryClient
         watermark_table: str,
-        sql_gen: SQLGenerator | None = None,
     ):
         self.bq_client = bq_client
         self.watermark_table = watermark_table
-        self.sql_gen = sql_gen or SQLGenerator()
 
     def ensure_table_exists(self) -> None:
         """Create the watermark table if it doesn't exist."""
-        sql = self.sql_gen.render(
-            "watermark/create_watermark_table.sql.j2",
-            table=self.watermark_table,
-        )
-        self.bq_client.execute(sql, job_label="ensure_watermark_table")
+        expr = build_create_watermark_table_sql(self.watermark_table)
+        self.bq_client.execute(expr.render(), job_label="ensure_watermark_table")
         logger.info("Watermark table ensured: %s", self.watermark_table)
 
     def read(self, source_name: str) -> dict[str, Any] | None:
@@ -54,13 +53,9 @@ class WatermarkManager:
 
         Returns dict of {cursor_column: cursor_value} or None if no watermark.
         """
-        sql = self.sql_gen.render(
-            "watermark/read_watermark.sql.j2",
-            table=self.watermark_table,
-            source_name=source_name,
-        )
+        expr = build_read_watermark_sql(self.watermark_table, source_name)
         try:
-            rows = self.bq_client.execute_and_fetch(sql)
+            rows = self.bq_client.execute_and_fetch(expr.render())
         except Exception as exc:
             raise WatermarkError(
                 f"Failed to read watermark for '{source_name}': {exc}"
@@ -102,8 +97,7 @@ class WatermarkManager:
             for col, val in cursors.items()
         ]
 
-        sql = self.sql_gen.render(
-            "watermark/update_watermark.sql.j2",
+        expr = build_update_watermark_sql(
             table=self.watermark_table,
             source_name=source_name,
             cursors=cursor_rows,
@@ -112,7 +106,9 @@ class WatermarkManager:
         )
 
         try:
-            self.bq_client.execute(sql, job_label=f"watermark_update_{source_name}")
+            self.bq_client.execute(
+                expr.render(), job_label=f"watermark_update_{source_name}"
+            )
         except Exception as exc:
             raise WatermarkError(
                 f"Failed to write watermark for '{source_name}': {exc}"

@@ -1,10 +1,10 @@
 """Tests for cluster quality metrics."""
 
-import pytest
-
 from bq_entity_resolution.config.schema import ClusterQualityConfig
-from bq_entity_resolution.reconciliation.engine import ReconciliationEngine
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.clustering import (
+    ClusterMetricsParams,
+    build_cluster_quality_metrics_sql,
+)
 
 
 def test_cluster_quality_config_defaults():
@@ -27,12 +27,13 @@ def test_cluster_quality_config_enabled():
     assert cq.alert_max_cluster_size == 50
 
 
-def test_cluster_quality_sql_generates(sample_config):
+def test_cluster_quality_sql_generates():
     """Cluster quality SQL renders successfully."""
-    sql_gen = SQLGenerator()
-    engine = ReconciliationEngine(sample_config, sql_gen)
-
-    sql = engine.generate_quality_metrics_sql()
+    params = ClusterMetricsParams(
+        cluster_table="proj.silver.entity_clusters",
+        matches_table="proj.silver.all_matched_pairs",
+    )
+    sql = build_cluster_quality_metrics_sql(params).render()
     assert "cluster_count" in sql
     assert "singleton_count" in sql
     assert "singleton_ratio" in sql
@@ -42,22 +43,24 @@ def test_cluster_quality_sql_generates(sample_config):
     assert "avg_match_confidence" in sql
 
 
-def test_cluster_quality_references_tables(sample_config):
+def test_cluster_quality_references_tables():
     """Cluster quality SQL references cluster and matches tables."""
-    sql_gen = SQLGenerator()
-    engine = ReconciliationEngine(sample_config, sql_gen)
-
-    sql = engine.generate_quality_metrics_sql()
+    params = ClusterMetricsParams(
+        cluster_table="proj.silver.entity_clusters",
+        matches_table="proj.silver.all_matched_pairs",
+    )
+    sql = build_cluster_quality_metrics_sql(params).render()
     assert "entity_clusters" in sql
     assert "all_matched_pairs" in sql
 
 
-def test_cluster_quality_includes_source_diversity(sample_config):
+def test_cluster_quality_includes_source_diversity():
     """Cluster quality SQL includes source diversity metric."""
-    sql_gen = SQLGenerator()
-    engine = ReconciliationEngine(sample_config, sql_gen)
-
-    sql = engine.generate_quality_metrics_sql()
+    params = ClusterMetricsParams(
+        cluster_table="proj.silver.entity_clusters",
+        matches_table="proj.silver.all_matched_pairs",
+    )
+    sql = build_cluster_quality_metrics_sql(params).render()
     assert "source_count" in sql
     assert "avg_source_diversity" in sql
 

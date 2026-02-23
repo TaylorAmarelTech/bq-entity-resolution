@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 
-from bq_entity_resolution.sql.generator import SQLGenerator
+from bq_entity_resolution.sql.builders.watermark import (
+    build_create_checkpoint_table_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +24,14 @@ class CheckpointManager:
         self,
         bq_client: object,
         checkpoint_table: str,
-        sql_gen: SQLGenerator | None = None,
     ):
         self._client = bq_client
         self._table = checkpoint_table
-        self._sql_gen = sql_gen or SQLGenerator()
 
     def ensure_table_exists(self) -> None:
         """Create the checkpoint table if it doesn't exist."""
-        sql = self._sql_gen.render(
-            "watermark/create_checkpoint_table.sql.j2",
-            table=self._table,
-        )
-        self._client.execute(sql, job_label="ensure_checkpoint_table")
+        expr = build_create_checkpoint_table_sql(self._table)
+        self._client.execute(expr.render(), job_label="ensure_checkpoint_table")
 
     def load_completed_stages(self, run_id: str) -> set[str]:
         """Load completed stages for a given run_id."""

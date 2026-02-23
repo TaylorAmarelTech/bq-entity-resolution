@@ -61,6 +61,49 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _resolve_includes(
+    config_dir: Path,
+    include_paths: list[str],
+    seen: set[str] | None = None,
+) -> dict[str, Any]:
+    """Resolve and merge included config files.
+
+    Includes are resolved relative to the including file's directory.
+    Circular includes are detected and rejected.
+    """
+    if seen is None:
+        seen = set()
+
+    merged: dict[str, Any] = {}
+    for include_rel in include_paths:
+        include_path = (config_dir / include_rel).resolve()
+        canonical = str(include_path)
+
+        if canonical in seen:
+            raise ConfigurationError(
+                f"Circular include detected: {include_rel} "
+                f"(already included via: {' -> '.join(seen)})"
+            )
+
+        if not include_path.exists():
+            raise ConfigurationError(f"Included config not found: {include_path}")
+
+        seen.add(canonical)
+
+        with open(include_path, encoding="utf-8") as f:
+            included = yaml.safe_load(f) or {}
+
+        # Recursively resolve nested includes
+        if "includes" in included:
+            nested_includes = included.pop("includes")
+            nested = _resolve_includes(include_path.parent, nested_includes, seen)
+            included = _deep_merge(nested, included)
+
+        merged = _deep_merge(merged, included)
+
+    return merged
+
+
 def load_config(
     config_path: str | Path,
     defaults_path: str | Path | None = None,
@@ -73,7 +116,8 @@ def load_config(
     Order of precedence (highest wins):
       1. *overrides* dict
       2. User config YAML
-      3. Defaults YAML
+      3. Included config files (``includes:`` key)
+      4. Defaults YAML
     """
     config_path = Path(config_path)
     if not config_path.exists():
@@ -91,7 +135,19 @@ def load_config(
     with open(config_path, encoding="utf-8") as f:
         user_config = yaml.safe_load(f) or {}
 
-    # Merge: defaults <- user <- overrides
+    # Resolve includes before merging
+    if "includes" in user_config:
+        include_paths = user_config.pop("includes")
+        if isinstance(include_paths, str):
+            include_paths = [include_paths]
+        included = _resolve_includes(
+            config_path.resolve().parent,
+            include_paths,
+            {str(config_path.resolve())},
+        )
+        base = _deep_merge(base, included)
+
+    # Merge: defaults <- includes <- user <- overrides
     merged = _deep_merge(base, user_config)
     if overrides:
         merged = _deep_merge(merged, overrides)

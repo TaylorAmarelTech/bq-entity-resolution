@@ -69,6 +69,35 @@ ROLE_FEATURES: dict[str, list[tuple[str, str]]] = {
     "ein": [
         ("clean", "lower_trim"),
     ],
+    # --- Insurance / Financial / Healthcare ---
+    "policy_number": [
+        ("clean", "upper_trim"),
+    ],
+    "claim_number": [
+        ("clean", "upper_trim"),
+    ],
+    "account_number": [
+        ("clean", "upper_trim"),
+    ],
+    "routing_number": [
+        ("clean", "upper_trim"),
+    ],
+    "npi": [
+        ("clean", "upper_trim"),
+    ],
+    "mrn": [
+        ("clean", "upper_trim"),
+    ],
+    "vin": [
+        ("clean", "upper_trim"),
+    ],
+    "transaction_amount": [],  # Numeric — no string transform
+    "transaction_date": [
+        ("year", "year_of_date"),
+    ],
+    "date_of_loss": [
+        ("year", "year_of_date"),
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -105,6 +134,28 @@ ROLE_BLOCKING_KEYS: dict[str, list[tuple[str, str]]] = {
     ],
     "company_name": [
         ("company_soundex", "soundex"),
+    ],
+    # --- Insurance / Financial / Healthcare ---
+    "policy_number": [
+        ("policy_fp", "farm_fingerprint"),
+    ],
+    "claim_number": [
+        ("claim_fp", "farm_fingerprint"),
+    ],
+    "account_number": [
+        ("account_fp", "farm_fingerprint"),
+    ],
+    "npi": [
+        ("npi_fp", "farm_fingerprint"),
+    ],
+    "mrn": [
+        ("mrn_fp", "farm_fingerprint"),
+    ],
+    "transaction_date": [
+        ("txn_date_year", "year_of_date"),
+    ],
+    "date_of_loss": [
+        ("dol_year", "year_of_date"),
     ],
 }
 
@@ -169,6 +220,39 @@ ROLE_COMPARISONS: dict[str, list[ComparisonSpec]] = {
     "ein": [
         ComparisonSpec("exact", "exact", "clean", weight=5.0),  # clean = lower_trim
     ],
+    # --- Insurance / Financial / Healthcare ---
+    "policy_number": [
+        ComparisonSpec("exact", "exact", "clean", weight=6.0),
+    ],
+    "claim_number": [
+        ComparisonSpec("exact", "exact", "clean", weight=6.0),
+    ],
+    "account_number": [
+        ComparisonSpec("exact", "exact", "clean", weight=6.0),
+    ],
+    "routing_number": [
+        ComparisonSpec("exact", "exact", "clean", weight=3.0),
+    ],
+    "npi": [
+        ComparisonSpec("exact", "exact", "clean", weight=6.0),
+    ],
+    "mrn": [
+        ComparisonSpec("exact", "exact", "clean", weight=6.0),
+    ],
+    "vin": [
+        ComparisonSpec("exact", "exact", "clean", weight=7.0),
+    ],
+    "transaction_amount": [
+        ComparisonSpec("within", "numeric_within", "", weight=2.0,
+                       params={"tolerance": 0.01}),
+    ],
+    "transaction_date": [
+        ComparisonSpec("within", "date_within_days", "", weight=2.0,
+                       params={"days": 1}),
+    ],
+    "date_of_loss": [
+        ComparisonSpec("exact", "exact", "", weight=4.0),
+    ],
 }
 
 
@@ -215,6 +299,39 @@ _NAME_PATTERNS: dict[str, str] = {
     "org_name": "company_name",
     "ein": "ein",
     "tax_id": "ein",
+    # Insurance
+    "policy_number": "policy_number",
+    "policy_no": "policy_number",
+    "policy_num": "policy_number",
+    "claim_number": "claim_number",
+    "claim_no": "claim_number",
+    "claim_num": "claim_number",
+    "claim_id": "claim_number",
+    "date_of_loss": "date_of_loss",
+    "loss_date": "date_of_loss",
+    # Financial
+    "account_number": "account_number",
+    "account_no": "account_number",
+    "account_num": "account_number",
+    "acct_number": "account_number",
+    "acct_no": "account_number",
+    "routing_number": "routing_number",
+    "routing_no": "routing_number",
+    "aba_number": "routing_number",
+    "transaction_amount": "transaction_amount",
+    "txn_amount": "transaction_amount",
+    "amount": "transaction_amount",
+    "transaction_date": "transaction_date",
+    "txn_date": "transaction_date",
+    # Healthcare
+    "npi": "npi",
+    "npi_number": "npi",
+    "mrn": "mrn",
+    "medical_record_number": "mrn",
+    "patient_id": "mrn",
+    # Automotive
+    "vin": "vin",
+    "vehicle_identification_number": "vin",
 }
 
 
@@ -317,4 +434,28 @@ BUSINESS_ROLES = {
     "company_name", "ein",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email",
+}
+
+INSURANCE_ROLES = {
+    "policy_number", "claim_number",
+    "first_name", "last_name", "full_name",
+    "date_of_birth", "date_of_loss",
+    "address_line_1", "city", "state", "zip_code",
+    "phone", "email", "ssn",
+}
+
+FINANCIAL_ROLES = {
+    "account_number", "routing_number",
+    "transaction_amount", "transaction_date",
+    "first_name", "last_name", "full_name",
+    "email", "phone", "ssn",
+    "address_line_1", "city", "state", "zip_code",
+}
+
+HEALTHCARE_ROLES = {
+    "npi", "mrn",
+    "first_name", "last_name", "full_name",
+    "date_of_birth",
+    "address_line_1", "city", "state", "zip_code",
+    "phone", "email", "ssn",
 }
