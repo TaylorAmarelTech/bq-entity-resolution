@@ -41,6 +41,7 @@ from typing import Any, Callable
 
 from bq_entity_resolution.backends.protocol import Backend
 from bq_entity_resolution.config.schema import PipelineConfig
+from bq_entity_resolution.monitoring.metrics import MetricsCollector
 from bq_entity_resolution.pipeline.dag import StageDAG, build_pipeline_dag
 from bq_entity_resolution.pipeline.executor import (
     CheckpointManagerProtocol,
@@ -211,7 +212,7 @@ class Pipeline:
         )
 
         # Execute
-        return self.execute(
+        result = self.execute(
             plan,
             backend=backend,
             run_id=run_id,
@@ -220,6 +221,19 @@ class Pipeline:
             resume=resume,
             on_progress=on_progress,
         )
+
+        # Record metrics (safe: configs may not have monitoring section)
+        try:
+            monitoring = getattr(self._config, "monitoring", None)
+            metrics_cfg = getattr(monitoring, "metrics", None) if monitoring else None
+            if metrics_cfg and getattr(metrics_cfg, "enabled", False):
+                collector = MetricsCollector(self._config)
+                collector.set_backend(backend)
+                collector.record_run(result)
+        except Exception:
+            logger.warning("Failed to record metrics", exc_info=True)
+
+        return result
 
     @classmethod
     def from_table(

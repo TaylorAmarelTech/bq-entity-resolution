@@ -41,7 +41,7 @@ class PipelineContext:
             "stage": stage,
             "step": step,
             "sql": sql,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(tz=None).isoformat(),
         })
 
     @property
@@ -49,4 +49,4 @@ class PipelineContext:
         """Total pipeline duration in seconds."""
         if self.finished_at:
             return (self.finished_at - self.started_at).total_seconds()
-        return (datetime.utcnow() - self.started_at).total_seconds()
+        return (datetime.now(tz=None) - self.started_at).total_seconds()

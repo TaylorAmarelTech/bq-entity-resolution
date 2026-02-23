@@ -37,7 +37,6 @@ def check_env(config: str | None) -> None:
     required_packages = [
         ("pydantic", "pydantic"),
         ("yaml", "pyyaml"),
-        ("jinja2", "Jinja2"),
         ("click", "click"),
         ("sqlglot", "sqlglot"),
     ]
