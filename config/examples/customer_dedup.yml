@@ -1,0 +1,217 @@
+# Customer Deduplication Configuration
+# A simpler example for deduplicating customer records across CRM systems.
+
+version: "1.0"
+
+project:
+  name: "customer_dedup"
+  description: "Deduplicate customer records across CRM sources"
+  bq_project: "${BQ_PROJECT}"
+  bq_dataset_bronze: "dedup_bronze"
+  bq_dataset_silver: "dedup_silver"
+  bq_dataset_gold: "dedup_gold"
+  bq_location: "US"
+  watermark_dataset: "dedup_meta"
+
+sources:
+  - name: "crm_customers"
+    table: "${BQ_PROJECT}.raw_crm.customers"
+    unique_key: "customer_id"
+    updated_at: "modified_date"
+    columns:
+      - name: "customer_id"
+        type: "STRING"
+      - name: "first_name"
+        type: "STRING"
+        role: "first_name"
+      - name: "last_name"
+        type: "STRING"
+        role: "last_name"
+      - name: "email"
+        type: "STRING"
+        role: "email"
+      - name: "phone"
+        type: "STRING"
+        role: "phone"
+      - name: "address"
+        type: "STRING"
+        role: "address_line_1"
+      - name: "city"
+        type: "STRING"
+        role: "city"
+      - name: "state"
+        type: "STRING"
+        role: "state"
+      - name: "zip"
+        type: "STRING"
+        role: "zip"
+      - name: "dob"
+        type: "DATE"
+      - name: "modified_date"
+        type: "TIMESTAMP"
+    passthrough_columns:
+      - "source_system"
+      - "account_number"
+
+feature_engineering:
+  name_features:
+    enabled: true
+    features:
+      - name: "first_name_clean"
+        function: "name_clean"
+        input: "first_name"
+      - name: "last_name_clean"
+        function: "name_clean"
+        input: "last_name"
+      - name: "first_name_soundex"
+        function: "soundex"
+        input: "first_name_clean"
+      - name: "last_name_soundex"
+        function: "soundex"
+        input: "last_name_clean"
+      - name: "first_initial"
+        function: "first_letter"
+        input: "first_name_clean"
+      - name: "first_name_len"
+        function: "char_length"
+        input: "first_name_clean"
+
+  address_features:
+    enabled: true
+    features:
+      - name: "address_clean"
+        function: "address_standardize"
+        input: "address"
+      - name: "state_clean"
+        function: "upper_trim"
+        input: "state"
+      - name: "city_clean"
+        function: "upper_trim"
+        input: "city"
+      - name: "zip5"
+        function: "left"
+        input: "zip"
+        params: { length: 5 }
+
+  contact_features:
+    enabled: true
+    features:
+      - name: "phone_clean"
+        function: "phone_standardize"
+        input: "phone"
+      - name: "email_clean"
+        function: "lower_trim"
+        input: "email"
+
+  blocking_keys:
+    - name: "bk_last_zip"
+      function: "farm_fingerprint_concat"
+      inputs: ["last_name_soundex", "zip5"]
+    - name: "bk_email"
+      function: "farm_fingerprint"
+      inputs: ["email_clean"]
+    - name: "bk_phone"
+      function: "farm_fingerprint"
+      inputs: ["phone_clean"]
+    - name: "bk_name_state"
+      function: "farm_fingerprint_concat"
+      inputs: ["last_name_soundex", "first_name_soundex", "state_clean"]
+
+  composite_keys:
+    - name: "ck_full_identity"
+      function: "farm_fingerprint_concat"
+      inputs: ["first_name_clean", "last_name_clean", "address_clean", "zip5"]
+
+matching_tiers:
+  - name: "exact_identity"
+    description: "Exact match on full name + address"
+    confidence: 1.0
+    blocking:
+      paths:
+        - keys: ["ck_full_identity"]
+          candidate_limit: 50
+    comparisons:
+      - left: "ck_full_identity"
+        right: "ck_full_identity"
+        method: "exact"
+        weight: 10.0
+    threshold:
+      min_score: 10.0
+
+  - name: "email_match"
+    description: "Same email + similar name"
+    confidence: 0.95
+    blocking:
+      paths:
+        - keys: ["bk_email"]
+          candidate_limit: 50
+    comparisons:
+      - left: "email_clean"
+        right: "email_clean"
+        method: "exact_case_insensitive"
+        weight: 5.0
+      - left: "last_name_clean"
+        right: "last_name_clean"
+        method: "levenshtein"
+        params: { max_distance: 2 }
+        weight: 3.0
+    threshold:
+      min_score: 8.0
+
+  - name: "fuzzy_name_address"
+    description: "Fuzzy name + address matching"
+    blocking:
+      paths:
+        - keys: ["bk_last_zip"]
+          candidate_limit: 200
+        - keys: ["bk_name_state"]
+          candidate_limit: 150
+    comparisons:
+      - left: "first_name_clean"
+        right: "first_name_clean"
+        method: "levenshtein_normalized"
+        params: { threshold: 0.8 }
+        weight: 3.0
+      - left: "last_name_clean"
+        right: "last_name_clean"
+        method: "levenshtein_normalized"
+        params: { threshold: 0.8 }
+        weight: 3.0
+      - left: "zip5"
+        right: "zip5"
+        method: "exact"
+        weight: 2.0
+      - left: "state_clean"
+        right: "state_clean"
+        method: "exact"
+        weight: 1.0
+    threshold:
+      min_score: 7.0
+    hard_negatives:
+      - left: "first_initial"
+        method: "different"
+        action: "penalize"
+        penalty: -2.0
+      - left: "dob"
+        method: "different"
+        action: "disqualify"
+    soft_signals:
+      - left: "phone_clean"
+        method: "exact"
+        bonus: 2.0
+
+reconciliation:
+  strategy: "tier_priority"
+  clustering:
+    method: "connected_components"
+    max_iterations: 15
+  canonical_selection:
+    method: "completeness"
+  output:
+    entity_id_prefix: "CUST"
+
+incremental:
+  enabled: true
+  grace_period_hours: 24
+  cursor_columns: ["modified_date"]
+  batch_size: 1000000

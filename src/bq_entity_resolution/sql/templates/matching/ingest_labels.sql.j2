@@ -1,0 +1,46 @@
+{#
+  Ingest human labels from the active learning review queue into the labels table.
+
+  Creates the labels table if it doesn't exist, then merges labeled pairs
+  from the review queue. Only pairs where human_label IS NOT NULL are ingested.
+
+  Parameters:
+    labels_table: fully-qualified table to store labels
+    review_queue_table: fully-qualified review queue table to read from
+    tier_name: name of the tier these labels belong to
+#}
+
+{# Ensure labels table exists #}
+CREATE TABLE IF NOT EXISTS `{{ labels_table }}` (
+  l_entity_uid STRING NOT NULL,
+  r_entity_uid STRING NOT NULL,
+  is_match BOOL NOT NULL,
+  tier_name STRING,
+  label_source STRING DEFAULT 'active_learning',
+  ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+);
+
+{# Merge new labels from review queue #}
+MERGE INTO `{{ labels_table }}` AS target
+USING (
+  SELECT
+    l_entity_uid,
+    r_entity_uid,
+    CASE WHEN human_label = 'match' THEN TRUE ELSE FALSE END AS is_match,
+    '{{ tier_name }}' AS tier_name,
+    'active_learning' AS label_source,
+    CURRENT_TIMESTAMP() AS ingested_at
+  FROM `{{ review_queue_table }}`
+  WHERE human_label IS NOT NULL
+) AS source
+ON target.l_entity_uid = source.l_entity_uid
+  AND target.r_entity_uid = source.r_entity_uid
+  AND target.tier_name = source.tier_name
+WHEN MATCHED THEN
+  UPDATE SET
+    is_match = source.is_match,
+    ingested_at = source.ingested_at
+WHEN NOT MATCHED THEN
+  INSERT (l_entity_uid, r_entity_uid, is_match, tier_name, label_source, ingested_at)
+  VALUES (source.l_entity_uid, source.r_entity_uid, source.is_match,
+          source.tier_name, source.label_source, source.ingested_at)

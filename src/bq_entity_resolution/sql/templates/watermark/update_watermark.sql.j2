@@ -1,0 +1,39 @@
+{#
+  Update watermark values for a source.
+  Marks previous values as not current and inserts new values.
+  Wrapped in a transaction for atomicity — a crash between UPDATE and INSERT
+  cannot leave the watermark in an inconsistent state.
+
+  Parameters:
+    table: fully-qualified watermark table name
+    source_name: source identifier
+    cursors: list of {column, value, type}
+    run_id: pipeline run identifier
+    now: ISO timestamp string
+#}
+
+BEGIN TRANSACTION;
+
+-- Mark previous watermarks as not current
+UPDATE `{{ table }}`
+SET is_current = FALSE
+WHERE source_name = '{{ source_name | sql_escape }}'
+  AND is_current = TRUE;
+
+-- Insert new watermark values
+INSERT INTO `{{ table }}`
+  (source_name, cursor_column, cursor_value, cursor_type, updated_at, run_id, is_current)
+VALUES
+{% for cursor in cursors %}
+  (
+    '{{ source_name | sql_escape }}',
+    '{{ cursor.column | sql_escape }}',
+    '{{ cursor.value | sql_escape }}',
+    '{{ cursor.type | sql_escape }}',
+    TIMESTAMP('{{ now | sql_escape }}'),
+    '{{ run_id | sql_escape }}',
+    TRUE
+  ){{ "," if not loop.last }}
+{% endfor %};
+
+COMMIT TRANSACTION;

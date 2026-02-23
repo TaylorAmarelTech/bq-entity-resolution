@@ -1,0 +1,283 @@
+# Probabilistic Entity Resolution Example
+#
+# Demonstrates Fellegi-Sunter matching with:
+# - Multi-level comparison outcomes (exact → fuzzy → no match)
+# - Manual m/u probabilities
+# - EM-based parameter estimation
+# - Active learning review queue
+#
+# This config deduplicates a generic person/company dataset.
+# Adapt the source table, columns, and features to your schema.
+
+version: "1.0"
+
+project:
+  name: probabilistic_dedup
+  description: "Probabilistic entity resolution with Fellegi-Sunter scoring"
+  bq_project: my-gcp-project
+  bq_dataset_bronze: er_bronze
+  bq_dataset_silver: er_silver
+  bq_dataset_gold: er_gold
+
+sources:
+  - name: contacts
+    table: my-gcp-project.raw.contacts
+    unique_key: contact_id
+    updated_at: updated_at
+    columns:
+      - name: contact_id
+        type: STRING
+      - name: first_name
+        type: STRING
+      - name: last_name
+        type: STRING
+      - name: email
+        type: STRING
+      - name: phone
+        type: STRING
+      - name: address
+        type: STRING
+      - name: city
+        type: STRING
+      - name: state
+        type: STRING
+      - name: zip
+        type: STRING
+      - name: dob
+        type: DATE
+      - name: updated_at
+        type: TIMESTAMP
+
+feature_engineering:
+  name_features:
+    features:
+      - name: first_name_clean
+        function: name_clean
+        input: first_name
+      - name: last_name_clean
+        function: name_clean
+        input: last_name
+      - name: first_name_soundex
+        function: soundex
+        input: first_name_clean
+      - name: last_name_soundex
+        function: soundex
+        input: last_name_clean
+      - name: nickname_key
+        function: nickname_match_key
+        input: first_name_clean
+
+  address_features:
+    features:
+      - name: addr_std
+        function: address_standardize
+        input: address
+      - name: zip5
+        function: zip5
+        input: zip
+      - name: state_clean
+        function: upper_trim
+        input: state
+
+  contact_features:
+    features:
+      - name: phone_std
+        function: phone_standardize
+        input: phone
+      - name: email_lower
+        function: lower_trim
+        input: email
+      - name: email_dom
+        function: email_domain
+        input: email
+
+  blocking_keys:
+    - name: bk_soundex_zip
+      function: farm_fingerprint_concat
+      inputs: [last_name_soundex, zip5]
+    - name: bk_last_first
+      function: farm_fingerprint_concat
+      inputs: [last_name_clean, first_name_clean]
+    - name: bk_email
+      function: farm_fingerprint
+      inputs: [email_lower]
+
+  composite_keys:
+    - name: ck_exact
+      function: farm_fingerprint_concat
+      inputs: [first_name_clean, last_name_clean, zip5, phone_std]
+
+# Global training config (applied to all F-S tiers that don't override)
+training:
+  method: em
+  em_max_iterations: 10
+  em_sample_size: 100000
+  em_initial_match_proportion: 0.05
+
+matching_tiers:
+  # Tier 1: Exact composite match (deterministic, not probabilistic)
+  - name: exact_composite
+    description: "Exact match on name + zip + phone"
+    blocking:
+      paths:
+        - keys: [ck_exact]
+          candidate_limit: 50
+    comparisons:
+      - left: ck_exact
+        right: ck_exact
+        method: exact
+        weight: 10.0
+    threshold:
+      method: sum
+      min_score: 10.0
+    confidence: 1.0
+
+  # Tier 2: Probabilistic fuzzy name matching (EM-trained)
+  - name: probabilistic_name
+    description: "Fellegi-Sunter with multi-level name comparisons"
+    blocking:
+      paths:
+        - keys: [bk_soundex_zip]
+          candidate_limit: 300
+        - keys: [bk_email]
+          candidate_limit: 200
+    comparisons:
+      - left: first_name_clean
+        right: first_name_clean
+        method: jaro_winkler
+        levels:
+          - label: exact
+            method: exact
+            # m/u will be estimated by EM
+          - label: fuzzy_high
+            method: jaro_winkler
+            params: { threshold: 0.9 }
+          - label: fuzzy_low
+            method: jaro_winkler
+            params: { threshold: 0.7 }
+          - label: else
+
+      - left: last_name_clean
+        right: last_name_clean
+        method: levenshtein
+        levels:
+          - label: exact
+            method: exact
+          - label: fuzzy
+            method: levenshtein
+            params: { max_distance: 2 }
+          - label: else
+
+      - left: zip5
+        right: zip5
+        method: exact
+        levels:
+          - label: exact
+            method: exact
+          - label: else
+
+      - left: phone_std
+        right: phone_std
+        method: exact
+        levels:
+          - label: exact
+            method: exact
+          - label: else
+
+      - left: email_dom
+        right: email_dom
+        method: exact
+        levels:
+          - label: exact
+            method: exact
+          - label: else
+
+    threshold:
+      method: fellegi_sunter
+      match_threshold: 6.0
+
+    hard_negatives:
+      - left: last_name_clean
+        method: different
+        action: disqualify
+
+    soft_signals:
+      - left: state_clean
+        method: exact
+        bonus: 0.5
+
+    active_learning:
+      enabled: true
+      queue_size: 500
+      uncertainty_window: 0.15
+
+  # Tier 3: Manual m/u (for expert-tuned comparisons)
+  - name: manual_probabilistic
+    description: "Fellegi-Sunter with manually specified m/u"
+    enabled: false  # Enable when you have domain expertise for m/u
+    training:
+      method: none  # Override global — use manual m/u below
+    blocking:
+      paths:
+        - keys: [bk_last_first]
+          candidate_limit: 200
+    comparisons:
+      - left: first_name_clean
+        right: first_name_clean
+        method: exact
+        levels:
+          - label: exact
+            method: exact
+            m: 0.95
+            u: 0.08
+          - label: fuzzy
+            method: jaro_winkler
+            params: { threshold: 0.85 }
+            m: 0.70
+            u: 0.15
+          - label: else
+            m: 0.05
+            u: 0.77
+
+      - left: last_name_clean
+        right: last_name_clean
+        method: exact
+        levels:
+          - label: exact
+            method: exact
+            m: 0.92
+            u: 0.05
+          - label: fuzzy
+            method: levenshtein
+            params: { max_distance: 1 }
+            m: 0.65
+            u: 0.10
+          - label: else
+            m: 0.08
+            u: 0.85
+
+      - left: dob
+        right: dob
+        method: exact
+        levels:
+          - label: exact
+            method: exact
+            m: 0.98
+            u: 0.003
+          - label: else
+            m: 0.02
+            u: 0.997
+    threshold:
+      method: fellegi_sunter
+      match_threshold: 8.0
+
+reconciliation:
+  strategy: tier_priority
+  clustering:
+    method: connected_components
+    max_iterations: 20
+  canonical_selection:
+    method: completeness
+  output:
+    include_match_metadata: true
+    entity_id_prefix: ENT

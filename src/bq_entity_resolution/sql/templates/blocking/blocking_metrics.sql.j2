@@ -1,0 +1,27 @@
+{#
+  Compute blocking evaluation metrics for a tier.
+
+  Measures how well blocking reduces the comparison space while
+  retaining true matches.
+
+  Parameters:
+    candidates_table: fully-qualified candidates table
+    matches_table: fully-qualified matches table (after scoring)
+    source_table: fully-qualified featured table
+    tier_name: string
+#}
+
+SELECT
+  '{{ tier_name }}' AS tier_name,
+  (SELECT COUNT(*) FROM `{{ source_table }}`) AS total_records,
+  (SELECT COUNT(*) FROM `{{ candidates_table }}`) AS candidate_pairs,
+  (SELECT COUNT(*) FROM `{{ matches_table }}`) AS matched_pairs,
+  SAFE_DIVIDE(
+    (SELECT COUNT(*) FROM `{{ matches_table }}`),
+    (SELECT COUNT(*) FROM `{{ candidates_table }}`)
+  ) AS precision,
+  SAFE_DIVIDE(
+    (SELECT COUNT(*) FROM `{{ candidates_table }}`),
+    (SELECT COUNT(*) FROM `{{ source_table }}`) * ((SELECT COUNT(*) FROM `{{ source_table }}`) - 1) / 2
+  ) AS reduction_ratio,
+  CURRENT_TIMESTAMP() AS computed_at

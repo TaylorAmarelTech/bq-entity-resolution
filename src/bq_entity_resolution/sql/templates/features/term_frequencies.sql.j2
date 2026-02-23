@@ -1,0 +1,27 @@
+{#
+  Compute term frequency statistics for each TF-enabled column.
+
+  Pre-computes value frequencies from the featured table so that
+  matching SQL can look up per-value u-probability adjustments.
+  Common values (e.g. "Smith") get higher u, reducing match evidence.
+  Rare values (e.g. "Worthington") keep low u, preserving strong evidence.
+
+  Parameters:
+    target_table: fully-qualified output table
+    source_table: fully-qualified featured table
+    tf_columns: list of {column_name: str} — columns to compute frequencies for
+#}
+
+CREATE OR REPLACE TABLE `{{ target_table }}` AS
+
+{% for col in tf_columns %}
+{% if not loop.first %}UNION ALL{% endif %}
+SELECT
+  '{{ col.column_name }}' AS tf_col,
+  CAST({{ col.column_name }} AS STRING) AS tf_value,
+  COUNT(*) AS value_count,
+  COUNT(*) / SUM(COUNT(*)) OVER () AS tf_frequency
+FROM `{{ source_table }}`
+WHERE {{ col.column_name }} IS NOT NULL
+GROUP BY {{ col.column_name }}
+{% endfor %}

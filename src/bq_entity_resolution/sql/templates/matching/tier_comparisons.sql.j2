@@ -1,0 +1,107 @@
+{#
+  Execute comparisons for a single matching tier.
+
+  Joins candidate pairs to source features, applies hard negatives,
+  computes comparison scores, applies soft signals, and filters by threshold.
+
+  Parameters:
+    tier_name: string
+    tier_index: int (priority — lower is higher)
+    matches_table: fully-qualified output table for matches
+    candidates_table: fully-qualified table of candidate pairs
+    source_table: fully-qualified featured source table
+    comparisons: list of {name, sql_expr, weight, tf_enabled, tf_column, tf_minimum_u}
+    hard_negatives: list of {sql_condition, action, penalty}
+    soft_signals: list of {sql_condition, bonus}
+    threshold: {method, min_score}
+    confidence: float or None (fixed confidence for this tier)
+    tf_table: fully-qualified term frequency table (or None)
+#}
+
+CREATE OR REPLACE TABLE `{{ matches_table }}` AS
+
+WITH scored AS (
+  SELECT
+    c.l_entity_uid,
+    c.r_entity_uid,
+
+    {# Individual comparison scores (boolean cast to 0/1) #}
+    {% for comp in comparisons %}
+    CASE WHEN {{ comp.sql_expr }} THEN 1.0 ELSE 0.0 END AS score_{{ comp.name }},
+    {% endfor %}
+
+    {# Weighted aggregate score #}
+    (
+      {% for comp in comparisons %}
+      {% if comp.tf_enabled %}
+      {# TF-adjusted weight: scale by log(1 / max(tf_freq, floor)) for matched values #}
+      CASE WHEN {{ comp.sql_expr }}
+        THEN {{ comp.weight }} * LOG(1.0 / GREATEST(COALESCE(tf_{{ comp.name }}.tf_frequency, {{ comp.tf_minimum_u }}), {{ comp.tf_minimum_u }}))
+        ELSE 0.0
+      END
+      {% else %}
+      {{ comp.weight }} * (CASE WHEN {{ comp.sql_expr }} THEN 1.0 ELSE 0.0 END)
+      {% endif %}
+      {{ "+ " if not loop.last else "" }}
+      {% endfor %}
+    )
+    {# Soft signal bonuses #}
+    {% for ss in soft_signals %}
+    + CASE WHEN {{ ss.sql_condition }} THEN {{ ss.bonus }} ELSE 0.0 END
+    {% endfor %}
+    {# Hard negative penalties (penalize type only) #}
+    {% for hn in hard_negatives %}
+    {% if hn.action == 'penalize' %}
+    + CASE WHEN {{ hn.sql_condition }} THEN {{ hn.penalty }} ELSE 0.0 END
+    {% endif %}
+    {% endfor %}
+    AS total_score
+
+  FROM `{{ candidates_table }}` c
+  INNER JOIN `{{ source_table }}` l ON c.l_entity_uid = l.entity_uid
+  INNER JOIN `{{ source_table }}` r ON c.r_entity_uid = r.entity_uid
+
+  {# Term frequency LEFT JOINs for TF-enabled comparisons #}
+  {% if tf_table %}
+  {% for comp in comparisons %}
+  {% if comp.tf_enabled %}
+  LEFT JOIN `{{ tf_table }}` tf_{{ comp.name }}
+    ON tf_{{ comp.name }}.tf_col = '{{ comp.tf_column }}'
+    AND tf_{{ comp.name }}.tf_value = CAST(l.{{ comp.tf_column }} AS STRING)
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  WHERE 1=1
+  {# Hard negative disqualifications applied as WHERE filters #}
+  {% for hn in hard_negatives %}
+  {% if hn.action == 'disqualify' %}
+  AND NOT ({{ hn.sql_condition }})
+  {% endif %}
+  {% endfor %}
+)
+
+SELECT
+  l_entity_uid,
+  r_entity_uid,
+  total_score,
+  {{ tier_index }} AS tier_priority,
+  '{{ tier_name }}' AS tier_name,
+  {% if confidence is not none %}
+  {{ confidence }} AS match_confidence,
+  {% else %}
+  ROUND(total_score / NULLIF({{ max_possible_score }}, 0), 4) AS match_confidence,
+  {% endif %}
+  {% for comp in comparisons %}
+  score_{{ comp.name }},
+  {% endfor %}
+  {% if audit_trail_enabled is defined and audit_trail_enabled %}
+  TO_JSON_STRING(STRUCT(
+    {% for comp in comparisons %}
+    score_{{ comp.name }}{{ ", " if not loop.last else "" }}
+    {% endfor %}
+  )) AS match_detail,
+  {% endif %}
+  CURRENT_TIMESTAMP() AS matched_at
+FROM scored
+WHERE total_score >= {{ threshold.min_score }}

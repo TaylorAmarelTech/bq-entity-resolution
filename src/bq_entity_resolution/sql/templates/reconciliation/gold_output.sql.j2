@@ -1,0 +1,141 @@
+{#
+  Generate the gold resolved entities output table.
+
+  Joins cluster assignments to featured source data, selects the canonical
+  record per cluster, and produces the final output.
+
+  Parameters:
+    target_table: fully-qualified output table
+    source_table: fully-qualified featured source table
+    cluster_table: fully-qualified cluster assignment table
+    matches_table: fully-qualified all-matches table
+    canonical_method: 'completeness' | 'recency' | 'source_priority'
+    scoring_columns: list of column names used for completeness scoring
+    source_columns: list of all columns to include in output
+    passthrough_columns: list of passthrough columns
+    include_match_metadata: bool
+    entity_id_prefix: str
+    partition_column: optional partition column name
+    cluster_columns: list of clustering columns
+    canonical_index_table: optional fully-qualified canonical index table
+      (when set, reads ALL entities from canonical_index for cross-batch
+       canonical election and accumulative gold output)
+#}
+
+CREATE OR REPLACE TABLE `{{ target_table }}`
+{% if partition_column %}
+PARTITION BY {{ partition_column }}
+{% endif %}
+{% if cluster_columns %}
+CLUSTER BY {{ cluster_columns | join(', ') }}
+{% endif %}
+AS
+
+{% if canonical_index_table is defined and canonical_index_table %}
+{# Cross-batch: read ALL entities from canonical_index (includes cluster_id) #}
+WITH clustered AS (
+  SELECT * FROM `{{ canonical_index_table }}`
+),
+{% else %}
+{# Single-batch: read from featured + cluster_table #}
+WITH clustered AS (
+  SELECT
+    f.*,
+    c.cluster_id
+  FROM `{{ source_table }}` f
+  INNER JOIN `{{ cluster_table }}` c USING (entity_uid)
+),
+{% endif %}
+
+{# Score each record for canonical election #}
+canonical_scores AS (
+  SELECT
+    entity_uid,
+    cluster_id,
+    {% if canonical_method == 'completeness' %}
+    -- Completeness: count non-null scoring columns
+    (
+      {% for col in scoring_columns %}
+      CASE WHEN {{ col }} IS NOT NULL THEN 1 ELSE 0 END
+      {{ "+ " if not loop.last else "" }}
+      {% endfor %}
+    ) AS canonical_score,
+    {% elif canonical_method == 'recency' %}
+    -- Recency: most recent record wins
+    UNIX_MICROS(_source_updated_at) AS canonical_score,
+    {% elif canonical_method == 'source_priority' %}
+    -- Source priority: predefined source ordering
+    CASE source_name
+      {% for src in source_priority %}
+      WHEN '{{ src }}' THEN {{ 1000 - loop.index0 }}
+      {% endfor %}
+      ELSE 0
+    END AS canonical_score,
+    {% endif %}
+  FROM clustered
+),
+
+{# Elect canonical per cluster #}
+canonicals AS (
+  SELECT
+    cluster_id,
+    ARRAY_AGG(entity_uid ORDER BY canonical_score DESC, entity_uid ASC LIMIT 1)[OFFSET(0)]
+      AS canonical_entity_uid
+  FROM canonical_scores
+  GROUP BY cluster_id
+),
+
+{# Final output #}
+resolved AS (
+  SELECT
+    '{{ entity_id_prefix }}_' || CAST(cl.cluster_id AS STRING) AS resolved_entity_id,
+    cl.cluster_id,
+    can.canonical_entity_uid,
+    (f.entity_uid = can.canonical_entity_uid) AS is_canonical,
+
+    {# Source columns #}
+    {% for col in source_columns %}
+    f.{{ col }},
+    {% endfor %}
+
+    {# Passthrough columns #}
+    {% for col in passthrough_columns %}
+    f.{{ col }},
+    {% endfor %}
+
+    f.source_name,
+    f.entity_uid,
+    f._source_updated_at,
+    f._pipeline_loaded_at
+
+  FROM clustered f
+  JOIN canonicals can ON f.cluster_id = can.cluster_id
+  JOIN `{{ cluster_table }}` cl ON f.entity_uid = cl.entity_uid
+)
+
+SELECT
+  r.*
+  {% if include_match_metadata %}
+  ,m.tier_name AS matched_by_tier
+  ,m.total_score AS match_score
+  ,m.match_confidence
+  ,m.matched_at
+  {% endif %}
+FROM resolved r
+{% if include_match_metadata %}
+LEFT JOIN (
+  SELECT
+    l_entity_uid,
+    r_entity_uid,
+    tier_name,
+    total_score,
+    match_confidence,
+    matched_at,
+    ROW_NUMBER() OVER (
+      PARTITION BY r_entity_uid
+      ORDER BY tier_priority ASC, total_score DESC
+    ) AS rn
+  FROM `{{ matches_table }}`
+) m
+  ON r.entity_uid = m.r_entity_uid AND m.rn = 1
+{% endif %}

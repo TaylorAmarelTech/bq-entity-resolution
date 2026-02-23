@@ -1,0 +1,18 @@
+{#
+  Create the watermark tracking table if it doesn't exist.
+
+  Parameters:
+    table: fully-qualified table name
+#}
+
+CREATE TABLE IF NOT EXISTS `{{ table }}` (
+  source_name STRING NOT NULL,
+  cursor_column STRING NOT NULL,
+  cursor_value STRING NOT NULL,
+  cursor_type STRING NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  run_id STRING,
+  is_current BOOL NOT NULL DEFAULT TRUE
+)
+PARTITION BY DATE(updated_at)
+CLUSTER BY source_name

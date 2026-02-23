@@ -1,0 +1,81 @@
+{#
+  Incremental cluster assignment using connected components.
+
+  Initializes from prior cluster assignments (canonical_index) combined with
+  new entities from the current batch as singletons, then propagates minimum
+  cluster_id through ALL match edges until convergence.
+
+  Parameters:
+    all_matches_table: fully-qualified table with all tier matches
+    cluster_table: fully-qualified output table for cluster assignments
+    source_table: fully-qualified featured source table (current batch)
+    canonical_table: fully-qualified canonical index table (prior entities)
+    max_iterations: safety limit for convergence loop
+#}
+
+DECLARE iteration INT64 DEFAULT 0;
+DECLARE rows_updated INT64 DEFAULT 1;
+
+-- Step 1: Initialize clusters from prior entities + new singletons.
+-- Prior entities retain their cluster_ids from the canonical index.
+-- New entities (not in canonical_index) start as their own cluster.
+CREATE OR REPLACE TABLE `{{ cluster_table }}` AS
+SELECT entity_uid, cluster_id FROM `{{ canonical_table }}`
+UNION ALL
+SELECT DISTINCT entity_uid, entity_uid AS cluster_id
+FROM `{{ source_table }}`
+WHERE entity_uid NOT IN (SELECT entity_uid FROM `{{ canonical_table }}`);
+
+-- Step 2: Iteratively propagate minimum cluster_id through match edges
+WHILE rows_updated > 0 AND iteration < {{ max_iterations }} DO
+
+  -- Build edge list with current cluster assignments
+  CREATE OR REPLACE TEMP TABLE _edge_clusters AS
+  SELECT
+    c1.entity_uid AS uid1,
+    c1.cluster_id AS cid1,
+    c2.entity_uid AS uid2,
+    c2.cluster_id AS cid2
+  FROM `{{ all_matches_table }}` m
+  JOIN `{{ cluster_table }}` c1 ON m.l_entity_uid = c1.entity_uid
+  JOIN `{{ cluster_table }}` c2 ON m.r_entity_uid = c2.entity_uid;
+
+  -- Compute new cluster_id = minimum reachable cluster_id
+  CREATE OR REPLACE TEMP TABLE _new_clusters AS
+  SELECT
+    entity_uid,
+    LEAST(
+      cluster_id,
+      COALESCE(min_neighbor, cluster_id)
+    ) AS cluster_id
+  FROM (
+    SELECT
+      c.entity_uid,
+      c.cluster_id,
+      MIN(
+        LEAST(
+          COALESCE(e.cid1, c.cluster_id),
+          COALESCE(e.cid2, c.cluster_id)
+        )
+      ) AS min_neighbor
+    FROM `{{ cluster_table }}` c
+    LEFT JOIN _edge_clusters e
+      ON c.entity_uid = e.uid1 OR c.entity_uid = e.uid2
+    GROUP BY c.entity_uid, c.cluster_id
+  );
+
+  -- Count how many changed
+  SET rows_updated = (
+    SELECT COUNT(*)
+    FROM _new_clusters n
+    JOIN `{{ cluster_table }}` o USING (entity_uid)
+    WHERE n.cluster_id != o.cluster_id
+  );
+
+  -- Replace cluster table
+  CREATE OR REPLACE TABLE `{{ cluster_table }}` AS
+  SELECT * FROM _new_clusters;
+
+  SET iteration = iteration + 1;
+
+END WHILE;

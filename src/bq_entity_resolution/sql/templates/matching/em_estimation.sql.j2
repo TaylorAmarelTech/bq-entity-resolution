@@ -1,0 +1,213 @@
+{#
+  Expectation-Maximization for m/u probability estimation.
+
+  Runs entirely in BigQuery using scripting (DECLARE/LOOP/SET).
+  No data leaves BigQuery.
+
+  Uses a sample of candidate pairs to iteratively estimate:
+    m_j = P(comparison j level matches | true match pair)
+    u_j = P(comparison j level matches | non-match pair)
+
+  Parameters:
+    candidates_table: fully-qualified candidates table
+    source_table: fully-qualified featured source table
+    comparisons: list of {name, left, right, levels: [{label, sql_expr, has_expr}]}
+    max_iterations: int
+    convergence_threshold: float
+    sample_size: int
+    initial_match_proportion: float
+#}
+
+DECLARE iteration INT64 DEFAULT 0;
+DECLARE max_delta FLOAT64 DEFAULT 1.0;
+DECLARE match_prior FLOAT64 DEFAULT {{ initial_match_proportion }};
+DECLARE log_likelihood FLOAT64 DEFAULT 0.0;
+DECLARE prev_log_likelihood FLOAT64 DEFAULT -1e18;
+
+-- Step 1: Create sampled pairs with comparison outcomes
+CREATE TEMP TABLE _em_pairs AS
+SELECT
+  c.l_entity_uid,
+  c.r_entity_uid,
+  {% for comp in comparisons %}
+  {% for level in comp.levels %}
+  {% if level.has_expr %}
+  CASE WHEN {{ level.sql_expr }} THEN 1.0 ELSE 0.0 END AS {{ comp.name }}__{{ level.label }},
+  {% endif %}
+  {% endfor %}
+  {% endfor %}
+  0.5 AS match_weight
+FROM (
+  SELECT l_entity_uid, r_entity_uid
+  FROM `{{ candidates_table }}`
+  ORDER BY FARM_FINGERPRINT(CONCAT(l_entity_uid, '||', r_entity_uid))
+  LIMIT {{ sample_size }}
+) c
+INNER JOIN `{{ source_table }}` l ON c.l_entity_uid = l.entity_uid
+INNER JOIN `{{ source_table }}` r ON c.r_entity_uid = r.entity_uid;
+
+-- Step 2: Initialize parameter table
+CREATE TEMP TABLE _em_params (
+  comparison_name STRING,
+  level_label STRING,
+  m_prob FLOAT64,
+  u_prob FLOAT64
+);
+
+INSERT INTO _em_params (comparison_name, level_label, m_prob, u_prob) VALUES
+{% for comp in comparisons %}
+{% for level in comp.levels %}
+{% if level.has_expr %}
+('{{ comp.name }}', '{{ level.label }}', 0.9, 0.1){{ "," if not loop.last or not loop.parent.last else "" }}
+{% endif %}
+{% endfor %}
+{% endfor %};
+
+-- Step 3: EM iteration loop
+LOOP
+  SET iteration = iteration + 1;
+
+  -- E-step: compute match probability for each pair using log-space
+  -- log_match = log(prior) + sum(log(m_j) if agree_j else log(1-m_j))
+  -- log_nonmatch = log(1-prior) + sum(log(u_j) if agree_j else log(1-u_j))
+  -- match_weight = exp(log_match) / (exp(log_match) + exp(log_nonmatch))
+  CREATE OR REPLACE TEMP TABLE _em_scored AS
+  SELECT
+    p.l_entity_uid,
+    p.r_entity_uid,
+    {% for comp in comparisons %}
+    {% for level in comp.levels %}
+    {% if level.has_expr %}
+    p.{{ comp.name }}__{{ level.label }},
+    {% endif %}
+    {% endfor %}
+    {% endfor %}
+    (
+      LN(match_prior)
+      {% for comp in comparisons %}
+      {% for level in comp.levels %}
+      {% if level.has_expr %}
+      + CASE
+          WHEN p.{{ comp.name }}__{{ level.label }} = 1.0
+          THEN LN(GREATEST(mp_{{ comp.name }}__{{ level.label }}.m_prob, 0.001))
+          ELSE LN(GREATEST(1.0 - mp_{{ comp.name }}__{{ level.label }}.m_prob, 0.001))
+        END
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+    ) AS log_match,
+    (
+      LN(1.0 - match_prior)
+      {% for comp in comparisons %}
+      {% for level in comp.levels %}
+      {% if level.has_expr %}
+      + CASE
+          WHEN p.{{ comp.name }}__{{ level.label }} = 1.0
+          THEN LN(GREATEST(mp_{{ comp.name }}__{{ level.label }}.u_prob, 0.001))
+          ELSE LN(GREATEST(1.0 - mp_{{ comp.name }}__{{ level.label }}.u_prob, 0.001))
+        END
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+    ) AS log_nonmatch
+  FROM _em_pairs p
+  {% for comp in comparisons %}
+  {% for level in comp.levels %}
+  {% if level.has_expr %}
+  CROSS JOIN (
+    SELECT m_prob, u_prob FROM _em_params
+    WHERE comparison_name = '{{ comp.name }}' AND level_label = '{{ level.label }}'
+  ) mp_{{ comp.name }}__{{ level.label }}
+  {% endif %}
+  {% endfor %}
+  {% endfor %};
+
+  -- Compute posterior match probability
+  CREATE OR REPLACE TEMP TABLE _em_pairs_new AS
+  SELECT
+    l_entity_uid,
+    r_entity_uid,
+    {% for comp in comparisons %}
+    {% for level in comp.levels %}
+    {% if level.has_expr %}
+    {{ comp.name }}__{{ level.label }},
+    {% endif %}
+    {% endfor %}
+    {% endfor %}
+    SAFE_DIVIDE(
+      EXP(log_match),
+      EXP(log_match) + EXP(log_nonmatch)
+    ) AS match_weight
+  FROM _em_scored;
+
+  -- Log-likelihood: sum over all pairs of log(P(match)*P(data|match) + P(nonmatch)*P(data|nonmatch))
+  SET prev_log_likelihood = log_likelihood;
+  SET log_likelihood = (
+    SELECT COALESCE(SUM(LOG(
+      EXP(log_match) + EXP(log_nonmatch)
+    )), 0.0)
+    FROM _em_scored
+  );
+
+  DROP TABLE _em_pairs;
+  ALTER TABLE _em_pairs_new RENAME TO _em_pairs;
+
+  -- M-step: update m/u from weighted counts
+  CREATE OR REPLACE TEMP TABLE _em_params_new AS
+  {% for comp in comparisons %}
+  {% for level in comp.levels %}
+  {% if level.has_expr %}
+  SELECT
+    '{{ comp.name }}' AS comparison_name,
+    '{{ level.label }}' AS level_label,
+    GREATEST(0.001, LEAST(0.999,
+      COALESCE(SAFE_DIVIDE(
+        SUM(match_weight * {{ comp.name }}__{{ level.label }}),
+        NULLIF(SUM(match_weight), 0)
+      ), 0.5)
+    )) AS m_prob,
+    GREATEST(0.001, LEAST(0.999,
+      COALESCE(SAFE_DIVIDE(
+        SUM((1.0 - match_weight) * {{ comp.name }}__{{ level.label }}),
+        NULLIF(SUM(1.0 - match_weight), 0)
+      ), 0.5)
+    )) AS u_prob
+  FROM _em_pairs
+  {% if not loop.last or not loop.parent.last %}
+  UNION ALL
+  {% endif %}
+  {% endif %}
+  {% endfor %}
+  {% endfor %};
+
+  -- Check convergence
+  SET max_delta = (
+    SELECT COALESCE(MAX(ABS(n.m_prob - o.m_prob) + ABS(n.u_prob - o.u_prob)), 0)
+    FROM _em_params_new n
+    JOIN _em_params o USING (comparison_name, level_label)
+  );
+
+  -- Update params
+  DROP TABLE _em_params;
+  ALTER TABLE _em_params_new RENAME TO _em_params;
+
+  -- Update match prior
+  SET match_prior = (SELECT GREATEST(0.001, LEAST(0.999, AVG(match_weight))) FROM _em_pairs);
+
+  IF iteration >= {{ max_iterations }}
+     OR (max_delta < {{ convergence_threshold }}
+         AND ABS(log_likelihood - prev_log_likelihood) < {{ convergence_threshold }}) THEN
+    LEAVE;
+  END IF;
+END LOOP;
+
+-- Return final parameters
+SELECT
+  comparison_name,
+  level_label,
+  m_prob AS m_probability,
+  u_prob AS u_probability,
+  match_prior AS match_rate,
+  iteration AS em_iterations,
+  log_likelihood AS final_log_likelihood
+FROM _em_params;

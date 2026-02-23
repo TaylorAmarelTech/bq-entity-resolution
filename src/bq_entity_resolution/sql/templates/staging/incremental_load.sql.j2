@@ -1,0 +1,79 @@
+{#
+  Incremental load from source table into bronze staging area.
+
+  Parameters:
+    target_table: fully-qualified output table
+    source: SourceConfig object
+    watermark: dict of {cursor_column: cursor_value} or None
+    grace_period_hours: int
+    full_refresh: bool
+#}
+
+CREATE OR REPLACE TABLE `{{ target_table }}`
+{% if cluster_by %}
+CLUSTER BY {{ cluster_by | join(', ') }}
+{% endif %}
+AS
+
+SELECT
+  {# Generate a deterministic entity UID #}
+  CAST(FARM_FINGERPRINT(
+    CONCAT(
+      '{{ source.name | sql_escape }}', '||',
+      CAST({{ source.unique_key }} AS STRING)
+    )
+  ) AS STRING) AS entity_uid,
+
+  '{{ source.name | sql_escape }}' AS source_name,
+
+  {# Source columns #}
+  {% for col in source.columns %}
+  {{ col.name }},
+  {% endfor %}
+
+  {# Passthrough columns #}
+  {% for col in source.passthrough_columns %}
+  {{ col }},
+  {% endfor %}
+
+  {{ source.updated_at }} AS _source_updated_at,
+  CURRENT_TIMESTAMP() AS _pipeline_loaded_at
+
+FROM `{{ source.table }}` AS src
+
+{# Supplemental joins #}
+{% for join in source.joins %}
+{{ join.type }} JOIN `{{ join.table }}` AS {{ join.alias or 'j_' ~ loop.index0 }}
+  ON {{ join.on }}
+{% endfor %}
+
+WHERE 1=1
+
+{# Source-level filter #}
+{% if source.filter %}
+AND ({{ source.filter }})
+{% endif %}
+
+{# Incremental filter with grace period #}
+{% if watermark and not full_refresh %}
+AND (
+  {% for col, val in watermark.items() %}
+  {% if not loop.first %}OR {% endif %}
+  {% if grace_period_hours and grace_period_hours > 0 %}
+  {{ col }} > TIMESTAMP_SUB({{ val | format_watermark_value }}, INTERVAL {{ grace_period_hours }} HOUR)
+  {% else %}
+  {{ col }} > {{ val | format_watermark_value }}
+  {% endif %}
+  {% endfor %}
+)
+{% endif %}
+
+{# Exclude incomplete current day #}
+{% if source.partition_column %}
+AND {{ source.partition_column }} < CURRENT_DATE()
+{% endif %}
+
+{% if source.batch_size %}
+ORDER BY {{ source.updated_at }}, entity_uid
+LIMIT {{ source.batch_size }}
+{% endif %}

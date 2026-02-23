@@ -1,0 +1,137 @@
+{#
+  Fellegi-Sunter probabilistic matching for a single tier.
+
+  Uses log-likelihood ratio scoring with comparison levels.
+  Each comparison evaluates to the log2(m/u) weight of the matching level.
+  Total score = log_prior_odds + sum of per-comparison log-weights.
+  Match probability = 2^score / (1 + 2^score).
+
+  When tf_adjusted is true for a level, the u-probability is replaced with
+  max(static_u, tf_frequency) from the term frequency table, following
+  the Splink approach. This means common values contribute less evidence.
+
+  Parameters:
+    tier_name: string
+    tier_index: int (priority — lower is higher)
+    matches_table: fully-qualified output table for matches
+    candidates_table: fully-qualified table of candidate pairs
+    source_table: fully-qualified featured source table
+    comparisons: list of {name, levels: [{label, sql_expr, log_weight, tf_adjusted, m, u}], tf_enabled, tf_column, tf_minimum_u}
+    hard_negatives: list of {sql_condition, action, penalty}
+    soft_signals: list of {sql_condition, bonus}
+    threshold: {method, min_score, match_threshold}
+    log_prior_odds: float — log2(prior / (1 - prior))
+    tf_table: fully-qualified term frequency table (or None)
+#}
+
+CREATE OR REPLACE TABLE `{{ matches_table }}` AS
+
+WITH scored AS (
+  SELECT
+    c.l_entity_uid,
+    c.r_entity_uid,
+
+    {# Per-comparison level assignment and log-weight (COALESCE guards against NULL if no ELSE) #}
+    {% for comp in comparisons %}
+    COALESCE(CASE
+      {% for level in comp.levels %}
+      {% if level.sql_expr is not none %}
+      {% if level.tf_adjusted and tf_table %}
+      {# TF-adjusted: compute log2(m / max(u, tf_freq)) dynamically #}
+      WHEN {{ level.sql_expr }} THEN
+        LOG({{ level.m }}) / LOG(2) - LOG(GREATEST({{ level.u }}, COALESCE(tf_{{ comp.name }}.tf_frequency, {{ comp.tf_minimum_u }}))) / LOG(2)
+      {% else %}
+      WHEN {{ level.sql_expr }} THEN {{ level.log_weight }}
+      {% endif %}
+      {% else %}
+      ELSE {{ level.log_weight }}
+      {% endif %}
+      {% endfor %}
+    END, 0.0) AS log_weight_{{ comp.name }},
+    {% endfor %}
+
+    {# Total log-likelihood ratio score (COALESCE guards against NULL if no ELSE) #}
+    (
+      {{ log_prior_odds }}
+      {% for comp in comparisons %}
+      + COALESCE(CASE
+        {% for level in comp.levels %}
+        {% if level.sql_expr is not none %}
+        {% if level.tf_adjusted and tf_table %}
+        WHEN {{ level.sql_expr }} THEN
+          LOG({{ level.m }}) / LOG(2) - LOG(GREATEST({{ level.u }}, COALESCE(tf_{{ comp.name }}.tf_frequency, {{ comp.tf_minimum_u }}))) / LOG(2)
+        {% else %}
+        WHEN {{ level.sql_expr }} THEN {{ level.log_weight }}
+        {% endif %}
+        {% else %}
+        ELSE {{ level.log_weight }}
+        {% endif %}
+        {% endfor %}
+      END, 0.0)
+      {% endfor %}
+      {# Soft signal bonuses (in log-space) #}
+      {% for ss in soft_signals %}
+      + CASE WHEN {{ ss.sql_condition }} THEN {{ ss.bonus }} ELSE 0.0 END
+      {% endfor %}
+      {# Hard negative penalties #}
+      {% for hn in hard_negatives %}
+      {% if hn.action == 'penalize' %}
+      + CASE WHEN {{ hn.sql_condition }} THEN {{ hn.penalty }} ELSE 0.0 END
+      {% endif %}
+      {% endfor %}
+    ) AS total_score
+
+  FROM `{{ candidates_table }}` c
+  INNER JOIN `{{ source_table }}` l ON c.l_entity_uid = l.entity_uid
+  INNER JOIN `{{ source_table }}` r ON c.r_entity_uid = r.entity_uid
+
+  {# Term frequency LEFT JOINs for TF-enabled comparisons #}
+  {% if tf_table %}
+  {% for comp in comparisons %}
+  {% if comp.tf_enabled %}
+  LEFT JOIN `{{ tf_table }}` tf_{{ comp.name }}
+    ON tf_{{ comp.name }}.tf_col = '{{ comp.tf_column }}'
+    AND tf_{{ comp.name }}.tf_value = CAST(l.{{ comp.tf_column }} AS STRING)
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  WHERE 1=1
+  {# Hard negative disqualifications applied as WHERE filters #}
+  {% for hn in hard_negatives %}
+  {% if hn.action == 'disqualify' %}
+  AND NOT ({{ hn.sql_condition }})
+  {% endif %}
+  {% endfor %}
+)
+
+SELECT
+  l_entity_uid,
+  r_entity_uid,
+  total_score,
+  {{ tier_index }} AS tier_priority,
+  '{{ tier_name }}' AS tier_name,
+  {# Convert log-likelihood ratio to posterior match probability #}
+  {# Clamped to avoid FLOAT64 overflow: POW(2.0, x) overflows when x > ~1023 #}
+  ROUND(CASE
+    WHEN total_score > 50 THEN 1.0
+    WHEN total_score < -50 THEN 0.0
+    ELSE SAFE_DIVIDE(POW(2.0, total_score), 1.0 + POW(2.0, total_score))
+  END, 4) AS match_confidence,
+  {% for comp in comparisons %}
+  log_weight_{{ comp.name }},
+  {% endfor %}
+  {% if audit_trail_enabled is defined and audit_trail_enabled %}
+  TO_JSON_STRING(STRUCT(
+    {% for comp in comparisons %}
+    log_weight_{{ comp.name }}{{ ", " if not loop.last else "" }}
+    {% endfor %}
+  )) AS match_detail,
+  {% endif %}
+  CURRENT_TIMESTAMP() AS matched_at
+FROM scored
+{% if threshold.match_threshold is not none %}
+WHERE total_score >= {{ threshold.match_threshold }}
+{% else %}
+WHERE total_score >= {{ threshold.min_score }}
+{% endif %}
