@@ -100,8 +100,9 @@ class FeatureEngineeringStage(Stage):
         source_col_list = sorted(source_columns)
 
         # Resolve features
+        fc = _get_features_config(config)
         all_features: list[dict] = []
-        for group in _get_feature_groups(_get_features_config(config)):
+        for group in _get_feature_groups(fc):
             for feat in group.features:
                 func = FEATURE_FUNCTIONS.get(feat.function)
                 if func is None:
@@ -118,6 +119,27 @@ class FeatureEngineeringStage(Stage):
                     "inputs": inputs,
                 })
 
+        # Auto-inject compound detection features when enabled
+        cd = getattr(fc, "compound_detection", None)
+        if cd and getattr(cd, "enabled", False):
+            name_col = getattr(cd, "name_column", "first_name")
+            flag_col = getattr(cd, "flag_column", "is_compound_name")
+            for fn_name, feat_name in [
+                ("is_compound_name", flag_col),
+                ("compound_pattern", "compound_pattern"),
+            ]:
+                func = FEATURE_FUNCTIONS.get(fn_name)
+                if func is not None:
+                    try:
+                        expression = func([name_col])
+                    except Exception:
+                        continue
+                    all_features.append({
+                        "name": feat_name,
+                        "expression": expression,
+                        "inputs": [name_col],
+                    })
+
         # Split into independent and dependent
         feature_names = {f["name"] for f in all_features}
         pass1 = []
@@ -130,7 +152,6 @@ class FeatureEngineeringStage(Stage):
 
         # Blocking keys
         blocking_keys = []
-        fc = _get_features_config(config)
         for bk in fc.blocking_keys:
             func = FEATURE_FUNCTIONS.get(bk.function)
             if func is None:

@@ -250,8 +250,15 @@ def validate_comparison_methods_registered(config: PipelineConfig) -> None:
     Catches typos like ``method: "levenstein"`` at config load time
     instead of at SQL generation time.
     """
-    from bq_entity_resolution.features.registry import FEATURE_FUNCTIONS
-    from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
+    from bq_entity_resolution.features.registry import FEATURE_FUNCTIONS, load_feature_plugins
+    from bq_entity_resolution.matching.comparisons import (
+        COMPARISON_FUNCTIONS,
+        load_comparison_plugins,
+    )
+
+    # Ensure external plugins are discovered before validation
+    load_feature_plugins()
+    load_comparison_plugins()
 
     known_comparison = set(COMPARISON_FUNCTIONS.keys())
     known_feature = set(FEATURE_FUNCTIONS.keys())

@@ -37,11 +37,16 @@ evaluation can skip expensive comparisons when cheap ones already fail.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import logging
+from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 ComparisonFunction = Callable[..., str]
 
 COMPARISON_FUNCTIONS: dict[str, ComparisonFunction] = {}
+
+_plugins_loaded = False
 
 # Relative cost of each comparison method (lower = cheaper).
 # SQL builders should sort comparisons by this cost so that BigQuery
@@ -95,7 +100,29 @@ COMPARISON_COSTS: dict[str, int] = {
 
 
 def register(name: str) -> Callable[[ComparisonFunction], ComparisonFunction]:
-    """Decorator to register a comparison function."""
+    """Decorator to register a comparison function.
+
+    Can be used by external packages to add custom comparison methods::
+
+        from bq_entity_resolution import register_comparison
+
+        @register_comparison("my_similarity")
+        def my_similarity(left: str, right: str, **_: Any) -> str:
+            return f"(l.{left} = r.{right})"
+
+    The function is then available in YAML config::
+
+        comparisons:
+          - left: col_a
+            right: col_a
+            method: my_similarity
+            weight: 3.0
+
+    External packages can also auto-register via entry_points::
+
+        [project.entry-points."bq_er.comparisons"]
+        my_pkg = "my_pkg.comparisons"
+    """
 
     def decorator(func: ComparisonFunction) -> ComparisonFunction:
         COMPARISON_FUNCTIONS[name] = func
@@ -104,15 +131,45 @@ def register(name: str) -> Callable[[ComparisonFunction], ComparisonFunction]:
     return decorator
 
 
+def load_comparison_plugins() -> None:
+    """Discover and load comparison function plugins from entry_points.
+
+    Called automatically on first registry miss during config validation.
+    Safe to call multiple times — only loads once.
+    """
+    global _plugins_loaded
+    if _plugins_loaded:
+        return
+    _plugins_loaded = True
+
+    try:
+        from importlib.metadata import entry_points
+    except ImportError:
+        return
+
+    try:
+        eps = entry_points(group="bq_er.comparisons")
+    except TypeError:
+        all_eps = entry_points()
+        eps = all_eps.get("bq_er.comparisons", [])
+
+    for ep in eps:
+        try:
+            ep.load()
+            logger.debug("Loaded comparison plugin '%s'", ep.name)
+        except Exception as exc:
+            logger.warning("Failed to load comparison plugin '%s': %s", ep.name, exc)
+
+
 # UDF dataset placeholder — replaced at SQL generation time by the matching engine
 # when it resolves the {udf_dataset} variable from config
 _UDF_DATASET_PLACEHOLDER = "{udf_dataset}"
 
 
 # Import sub-modules to trigger @register decorators
-import bq_entity_resolution.matching.comparisons.string_comparisons  # noqa: E402, F401
-import bq_entity_resolution.matching.comparisons.numeric_comparisons  # noqa: E402, F401
+import bq_entity_resolution.matching.comparisons.composite_comparisons  # noqa: E402, F401
 import bq_entity_resolution.matching.comparisons.date_comparisons  # noqa: E402, F401
 import bq_entity_resolution.matching.comparisons.geo_comparisons  # noqa: E402, F401
 import bq_entity_resolution.matching.comparisons.null_comparisons  # noqa: E402, F401
-import bq_entity_resolution.matching.comparisons.composite_comparisons  # noqa: E402, F401
+import bq_entity_resolution.matching.comparisons.numeric_comparisons  # noqa: E402, F401
+import bq_entity_resolution.matching.comparisons.string_comparisons  # noqa: E402, F401

@@ -211,3 +211,98 @@ def nickname_match_key(inputs: list[str], **_: Any) -> str:
     # Reuse nickname_canonical logic
     canonical_expr = nickname_canonical(inputs)
     return f"FARM_FINGERPRINT({canonical_expr})"
+
+
+# ---------------------------------------------------------------------------
+# Compound record detection
+# ---------------------------------------------------------------------------
+# Compound records represent multiple people in a single row, e.g.:
+#   "Mr. and Mrs. Smith", "Jane and Joe Smith", "The Johnson Family"
+# These features detect, classify, and extract names from compound records.
+
+
+@register("is_compound_name")
+def is_compound_name(inputs: list[str], **_: Any) -> str:
+    """Detect compound names. Returns INT64 (0 or 1).
+
+    Detects: conjunctions (and/&/+), title pairs (Mr. and Mrs.),
+    family patterns (The X Family), slash separators (John/Jane).
+    """
+    col = inputs[0]
+    return (
+        "CASE WHEN "
+        f"REGEXP_CONTAINS(UPPER({col}), r'\\bAND\\b') "
+        f"OR REGEXP_CONTAINS({col}, r'\\s[&+]\\s') "
+        f"OR REGEXP_CONTAINS(UPPER({col}), "
+        f"r'\\b(MR|MRS|MS|DR)\\.?\\s*(AND|&)\\s*(MR|MRS|MS|DR)\\.?') "
+        f"OR REGEXP_CONTAINS(UPPER({col}), r'^THE\\s+\\w+\\s+FAMILY$') "
+        f"OR REGEXP_CONTAINS({col}, r'\\w+\\s*/\\s*\\w+') "
+        "THEN 1 ELSE 0 END"
+    )
+
+
+@register("compound_pattern")
+def compound_pattern(inputs: list[str], **_: Any) -> str:
+    """Classify compound pattern type. Returns STRING or NULL.
+
+    Returns one of: 'title_pair', 'conjunction', 'family', 'slash', or NULL.
+    """
+    col = inputs[0]
+    return (
+        "CASE "
+        f"WHEN REGEXP_CONTAINS(UPPER({col}), "
+        f"r'\\b(MR|MRS|MS|DR)\\.?\\s*(AND|&)\\s*(MR|MRS|MS|DR)\\.?') "
+        "THEN 'title_pair' "
+        f"WHEN REGEXP_CONTAINS(UPPER({col}), r'^THE\\s+\\w+\\s+FAMILY$') "
+        "THEN 'family' "
+        f"WHEN REGEXP_CONTAINS({col}, r'\\w+\\s*/\\s*\\w+') "
+        "THEN 'slash' "
+        f"WHEN REGEXP_CONTAINS(UPPER({col}), r'\\bAND\\b') "
+        f"OR REGEXP_CONTAINS({col}, r'\\s[&+]\\s') "
+        "THEN 'conjunction' "
+        "ELSE NULL END"
+    )
+
+
+@register("extract_compound_first")
+def extract_compound_first(inputs: list[str], **_: Any) -> str:
+    """Extract first individual name from a compound record.
+
+    Examples:
+        'Jane and Joe Smith' -> 'JANE'
+        'Mr. and Mrs. Smith' -> NULL (no extractable first name)
+        'John/Jane' -> 'JOHN'
+    """
+    col = inputs[0]
+    return (
+        "CASE "
+        # "Jane and Joe" / "Jane & Joe" pattern — first word before conjunction
+        f"WHEN REGEXP_CONTAINS(UPPER({col}), r'^\\w+\\s+(AND|&|\\+)\\s+\\w+') "
+        f"THEN UPPER(REGEXP_EXTRACT(UPPER({col}), r'^(\\w+)\\s+(?:AND|&|\\+)\\s+')) "
+        # "John/Jane" slash pattern
+        f"WHEN REGEXP_CONTAINS({col}, r'^\\w+\\s*/\\s*\\w+') "
+        f"THEN UPPER(REGEXP_EXTRACT(UPPER({col}), r'^(\\w+)\\s*/')) "
+        "ELSE NULL END"
+    )
+
+
+@register("extract_compound_second")
+def extract_compound_second(inputs: list[str], **_: Any) -> str:
+    """Extract second individual name from a compound record.
+
+    Examples:
+        'Jane and Joe Smith' -> 'JOE'
+        'Mr. and Mrs. Smith' -> NULL (no extractable second name)
+        'John/Jane' -> 'JANE'
+    """
+    col = inputs[0]
+    return (
+        "CASE "
+        # "Jane and Joe" pattern — word after conjunction (before optional last name)
+        f"WHEN REGEXP_CONTAINS(UPPER({col}), r'^\\w+\\s+(AND|&|\\+)\\s+\\w+') "
+        f"THEN UPPER(REGEXP_EXTRACT(UPPER({col}), r'(?:AND|&|\\+)\\s+(\\w+)')) "
+        # "John/Jane" slash pattern
+        f"WHEN REGEXP_CONTAINS({col}, r'^\\w+\\s*/\\s*\\w+') "
+        f"THEN UPPER(REGEXP_EXTRACT(UPPER({col}), r'/\\s*(\\w+)')) "
+        "ELSE NULL END"
+    )

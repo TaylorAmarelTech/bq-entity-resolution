@@ -10,25 +10,26 @@ from __future__ import annotations
 import bisect
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
-from bq_entity_resolution.stages.base import Stage, TableRef
-from bq_entity_resolution.stages.staging import StagingStage
+from bq_entity_resolution.stages.active_learning import ActiveLearningStage
+from bq_entity_resolution.stages.base import Stage
+from bq_entity_resolution.stages.blocking import BlockingStage
 from bq_entity_resolution.stages.features import (
     FeatureEngineeringStage,
     TermFrequencyStage,
 )
-from bq_entity_resolution.stages.blocking import BlockingStage
+from bq_entity_resolution.stages.label_ingestion import LabelIngestionStage
 from bq_entity_resolution.stages.match_accumulation import MatchAccumulationStage
 from bq_entity_resolution.stages.matching import MatchingStage
 from bq_entity_resolution.stages.reconciliation import (
+    CanonicalIndexInitStage,
+    CanonicalIndexPopulateStage,
     ClusteringStage,
-    GoldOutputStage,
     ClusterQualityStage,
+    GoldOutputStage,
 )
-from bq_entity_resolution.stages.active_learning import ActiveLearningStage
-from bq_entity_resolution.stages.label_ingestion import LabelIngestionStage
+from bq_entity_resolution.stages.staging import StagingStage
 
 logger = logging.getLogger(__name__)
 
@@ -164,12 +165,34 @@ class StageDAG:
         return f"StageDAG(stages={self.stage_names})"
 
 
-def build_pipeline_dag(config: PipelineConfig) -> StageDAG:
+def build_pipeline_dag(
+    config: PipelineConfig,
+    stage_overrides: dict[str, Stage] | None = None,
+    exclude_stages: set[str] | None = None,
+) -> StageDAG:
     """Build a complete pipeline DAG from config.
 
     Creates stage instances and resolves dependencies via
     TableRef matching + explicit tier-chain ordering.
+
+    Args:
+        config: Pipeline configuration.
+        stage_overrides: Replace built-in stages by name with custom
+            Stage implementations. The replacement stage must satisfy
+            the same input/output TableRef contract. Example::
+
+                build_pipeline_dag(config, stage_overrides={
+                    "clustering": MyCustomClusteringStage(config),
+                })
+
+        exclude_stages: Stage names to omit from the DAG entirely.
+            Use with care — downstream stages that depend on an
+            excluded stage's outputs will fail validation. Example::
+
+                build_pipeline_dag(config, exclude_stages={"cluster_quality"})
     """
+    stage_overrides = stage_overrides or {}
+    exclude_stages = exclude_stages or set()
     stages: list[Stage] = []
     explicit_edges: dict[str, list[str]] = {}
 
@@ -211,16 +234,52 @@ def build_pipeline_dag(config: PipelineConfig) -> StageDAG:
                 # Ingestion depends on review queue being created
                 explicit_edges[li_stage.name] = [al_stage.name]
 
-    # 5. Reconciliation
+    # 5. Canonical index init (incremental only — creates table if not exists)
+    inc = getattr(config, "incremental", None)
+    is_incremental = bool(inc and getattr(inc, "enabled", False))
+    if is_incremental:
+        stages.append(CanonicalIndexInitStage(config))
+        # Auto-depends on features via TableRef
+
+    # 6. Reconciliation
     stages.append(ClusteringStage(config))
     # Clustering depends on last matching tier completing
+    clustering_deps: list[str] = []
     if prev_matching_name:
-        explicit_edges["clustering"] = [prev_matching_name]
+        clustering_deps.append(prev_matching_name)
+    if is_incremental:
+        clustering_deps.append("canonical_index_init")
+    if clustering_deps:
+        explicit_edges["clustering"] = clustering_deps
 
     stages.append(GoldOutputStage(config))
 
-    # 6. Cluster quality (optional monitoring)
+    # 7. Canonical index populate (incremental only — upsert after clustering)
+    if is_incremental:
+        stages.append(CanonicalIndexPopulateStage(config))
+        explicit_edges["canonical_index_populate"] = ["clustering"]
+
+    # 8. Cluster quality (optional monitoring)
     if getattr(config.monitoring.cluster_quality, "enabled", False):
         stages.append(ClusterQualityStage(config))
+
+    # Apply stage overrides (replace built-in stages by name)
+    if stage_overrides:
+        for i, stage in enumerate(stages):
+            if stage.name in stage_overrides:
+                stages[i] = stage_overrides[stage.name]
+
+    # Apply exclusions (remove stages by name)
+    if exclude_stages:
+        stages = [s for s in stages if s.name not in exclude_stages]
+        # Clean up explicit edges referencing excluded stages
+        for name in list(explicit_edges):
+            if name in exclude_stages:
+                del explicit_edges[name]
+            else:
+                explicit_edges[name] = [
+                    dep for dep in explicit_edges[name]
+                    if dep not in exclude_stages
+                ]
 
     return StageDAG.from_stages(stages, explicit_edges)

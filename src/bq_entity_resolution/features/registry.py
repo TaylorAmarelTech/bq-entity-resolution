@@ -50,15 +50,42 @@ in the comparison stage.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import logging
+from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 FeatureFunction = Callable[..., str]
 
 FEATURE_FUNCTIONS: dict[str, FeatureFunction] = {}
 
+_plugins_loaded = False
+
 
 def register(name: str) -> Callable[[FeatureFunction], FeatureFunction]:
-    """Decorator to register a feature function."""
+    """Decorator to register a feature function.
+
+    Can be used by external packages to add custom feature functions::
+
+        from bq_entity_resolution import register_feature
+
+        @register_feature("my_custom_feature")
+        def my_custom_feature(inputs: list[str], **_: Any) -> str:
+            return f"UPPER(TRIM({inputs[0]}))"
+
+    The function is then available in YAML config::
+
+        features:
+          - name: cleaned
+            function: my_custom_feature
+            input: raw_column
+
+    External packages can also auto-register via entry_points in
+    ``pyproject.toml``::
+
+        [project.entry-points."bq_er.features"]
+        my_pkg = "my_pkg.features"
+    """
 
     def decorator(func: FeatureFunction) -> FeatureFunction:
         FEATURE_FUNCTIONS[name] = func
@@ -67,13 +94,43 @@ def register(name: str) -> Callable[[FeatureFunction], FeatureFunction]:
     return decorator
 
 
+def load_feature_plugins() -> None:
+    """Discover and load feature function plugins from entry_points.
+
+    Called automatically on first registry miss during config validation.
+    Safe to call multiple times — only loads once.
+    """
+    global _plugins_loaded
+    if _plugins_loaded:
+        return
+    _plugins_loaded = True
+
+    try:
+        from importlib.metadata import entry_points
+    except ImportError:
+        return
+
+    try:
+        eps = entry_points(group="bq_er.features")
+    except TypeError:
+        all_eps = entry_points()
+        eps = all_eps.get("bq_er.features", [])
+
+    for ep in eps:
+        try:
+            ep.load()
+            logger.debug("Loaded feature plugin '%s'", ep.name)
+        except Exception as exc:
+            logger.warning("Failed to load feature plugin '%s': %s", ep.name, exc)
+
+
 # Import sub-modules to trigger @register decorators
-import bq_entity_resolution.features.name_features  # noqa: E402, F401
 import bq_entity_resolution.features.address_features  # noqa: E402, F401
+import bq_entity_resolution.features.blocking_keys  # noqa: E402, F401
 import bq_entity_resolution.features.contact_features  # noqa: E402, F401
 import bq_entity_resolution.features.date_identity_features  # noqa: E402, F401
 import bq_entity_resolution.features.geo_features  # noqa: E402, F401
-import bq_entity_resolution.features.blocking_keys  # noqa: E402, F401
-import bq_entity_resolution.features.utility_features  # noqa: E402, F401
+import bq_entity_resolution.features.name_features  # noqa: E402, F401
 import bq_entity_resolution.features.phonetic_features  # noqa: E402, F401
+import bq_entity_resolution.features.utility_features  # noqa: E402, F401
 import bq_entity_resolution.features.zip_features  # noqa: E402, F401

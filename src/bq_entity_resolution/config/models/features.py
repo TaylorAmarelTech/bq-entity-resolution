@@ -19,6 +19,7 @@ __all__ = [
     "BlockingKeyDef",
     "CompositeKeyDef",
     "EnrichmentJoinConfig",
+    "CompoundDetectionConfig",
     "FeatureEngineeringConfig",
 ]
 
@@ -105,6 +106,26 @@ class EnrichmentJoinConfig(BaseModel):
     type: Literal["LEFT", "INNER"] = "LEFT"
 
 
+class CompoundDetectionConfig(BaseModel):
+    """Compound record detection and handling configuration.
+
+    When enabled, automatically injects compound detection features
+    (is_compound_name, compound_pattern) into feature engineering.
+
+    Actions:
+        flag:  Add detection columns only (default).
+        split: Expand compound rows into individual records.
+        both:  Split first, then flag the originals.
+    """
+
+    enabled: bool = False
+    name_column: str = "first_name"
+    last_name_column: str = "last_name"
+    action: Literal["flag", "split", "both"] = "flag"
+    flag_column: str = "is_compound_name"
+    custom_patterns: list[str] = Field(default_factory=list)
+
+
 class FeatureEngineeringConfig(BaseModel):
     """All feature engineering configuration."""
 
@@ -116,6 +137,9 @@ class FeatureEngineeringConfig(BaseModel):
     composite_keys: list[CompositeKeyDef] = Field(default_factory=list)
     custom_features: list[FeatureDef] = Field(default_factory=list)
     enrichment_joins: list[EnrichmentJoinConfig] = Field(default_factory=list)
+    compound_detection: CompoundDetectionConfig = Field(
+        default_factory=CompoundDetectionConfig
+    )
 
     def all_groups(self) -> list[FeatureGroupConfig]:
         """Return all feature groups (built-in + extra) for iteration."""

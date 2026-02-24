@@ -144,6 +144,94 @@ class WatermarkManager:
             if row.get(f"max_{col}") is not None
         }
 
+    def compute_new_watermark_from_staged(
+        self,
+        staged_table: str,
+        cursor_columns: list[str],
+        column_mapping: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Compute new watermark from the staged (bronze) table.
+
+        This is the correct approach for ordered cursors: the watermark
+        advances to the MAX values of what was actually staged in this
+        batch, not what exists in the raw source (which may be far ahead).
+
+        This prevents watermark drift that could cause the pipeline to
+        skip unprocessed records between the batch boundary and the
+        source maximum.
+
+        Args:
+            staged_table: The bronze staging table for the current batch.
+            cursor_columns: Original source cursor column names.
+            column_mapping: Optional mapping from source column names to
+                staged column names (e.g. {"updated_at": "source_updated_at"}).
+        """
+        mapping = column_mapping or {}
+        max_exprs = ", ".join(
+            f"MAX({mapping.get(col, col)}) AS max_{col}"
+            for col in cursor_columns
+        )
+        sql = f"SELECT {max_exprs} FROM `{staged_table}`"
+
+        try:
+            rows = self.bq_client.execute_and_fetch(sql)
+        except Exception as exc:
+            raise WatermarkError(
+                f"Failed to compute watermark from staged '{staged_table}': {exc}"
+            ) from exc
+
+        if not rows:
+            return {}
+
+        row = rows[0]
+        return {
+            col: row[f"max_{col}"]
+            for col in cursor_columns
+            if row.get(f"max_{col}") is not None
+        }
+
+    def has_unprocessed_records(
+        self,
+        source_table: str,
+        cursor_columns: list[str],
+        current_watermark: dict[str, Any],
+    ) -> bool:
+        """Check if there are records beyond the current watermark.
+
+        Used by drain mode to determine when to stop iterating.
+        """
+        if not current_watermark:
+            return True
+
+        conditions: list[str] = []
+        for col in cursor_columns:
+            val = current_watermark.get(col)
+            if val is not None:
+                from bq_entity_resolution.sql.builders.staging import (
+                    _format_watermark_value,
+                )
+                formatted = _format_watermark_value(val)
+                conditions.append(f"{col} > {formatted}")
+
+        if not conditions:
+            return True
+
+        where_clause = " OR ".join(conditions)
+        sql = (
+            f"SELECT COUNT(*) AS cnt FROM `{source_table}` "
+            f"WHERE {where_clause} LIMIT 1"
+        )
+
+        try:
+            rows = self.bq_client.execute_and_fetch(sql)
+        except Exception as exc:
+            logger.warning(
+                "Failed to check unprocessed records: %s", exc
+            )
+            return False
+
+        return bool(rows and rows[0].get("cnt", 0) > 0)
+
 
 def _serialize(value: Any) -> str:
     """Serialize a watermark value to string for storage."""

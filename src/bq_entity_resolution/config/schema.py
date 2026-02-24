@@ -30,6 +30,7 @@ __all__ = [
     "BlockingKeyDef",
     "CompositeKeyDef",
     "EnrichmentJoinConfig",
+    "CompoundDetectionConfig",
     "FeatureEngineeringConfig",
     # blocking
     "BlockingPathDef",
@@ -57,6 +58,7 @@ __all__ = [
     "LSHConfig",
     "EmbeddingConfig",
     "PartitionCursorConfig",
+    "HashCursorConfig",
     "IncrementalConfig",
     "MetricsConfig",
     "ProfilingConfig",

@@ -25,12 +25,14 @@ logger = logging.getLogger(__name__)
 )
 @click.option("--full-refresh", is_flag=True, help="Ignore watermarks, reprocess all")
 @click.option("--dry-run", is_flag=True, help="Generate SQL but don't execute")
+@click.option("--drain", is_flag=True, help="Auto-loop through batches until all records processed")
 @click.option("--tier", multiple=True, help="Run only specific tier(s) by name")
 def run(
     config: str,
     defaults: str | None,
     full_refresh: bool,
     dry_run: bool,
+    drain: bool,
     tier: tuple[str, ...],
 ) -> None:
     """Execute the entity resolution pipeline."""
@@ -78,6 +80,7 @@ def run(
             result = pipeline.run(
                 backend=backend,
                 full_refresh=full_refresh,
+                drain=drain,
             )
 
             click.echo(f"\nPipeline completed: {result.run_id}")

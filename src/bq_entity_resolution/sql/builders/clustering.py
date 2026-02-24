@@ -279,6 +279,40 @@ def build_incremental_cluster_sql(
     return SQLExpression.from_raw("\n".join(lines))
 
 
+@dataclass(frozen=True)
+class CanonicalIndexInitParams:
+    """Parameters for canonical index initialization."""
+    canonical_table: str
+    source_table: str  # Featured table (schema reference)
+    cluster_by: list[str] = field(default_factory=lambda: ["entity_uid"])
+    partition_by: str | None = None
+
+
+def build_canonical_index_init_sql(
+    params: CanonicalIndexInitParams,
+) -> SQLExpression:
+    """Build SQL to create canonical_index table if it doesn't exist.
+
+    Creates an empty table with the same schema as the featured table
+    plus a cluster_id column. Uses CREATE TABLE IF NOT EXISTS so it's
+    safe to call on every run — only creates on the first execution.
+    """
+    lines: list[str] = []
+    lines.append(
+        f"CREATE TABLE IF NOT EXISTS `{params.canonical_table}`"
+    )
+    if params.partition_by:
+        lines.append(f"PARTITION BY {params.partition_by}")
+    if params.cluster_by:
+        lines.append(f"CLUSTER BY {', '.join(params.cluster_by)}")
+    lines.append("AS")
+    lines.append(f"SELECT *, {ENTITY_UID} AS {CLUSTER_ID}")
+    lines.append(f"FROM `{params.source_table}`")
+    lines.append("WHERE FALSE;")
+
+    return SQLExpression.from_raw("\n".join(lines))
+
+
 def build_populate_canonical_index_sql(
     params: PopulateCanonicalIndexParams,
 ) -> SQLExpression:

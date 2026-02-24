@@ -59,6 +59,22 @@ class PartitionCursor:
 
 
 @dataclass(frozen=True)
+class HashCursor:
+    """A hash-based virtual cursor column for batch delineation.
+
+    When no natural secondary cursor exists, generates:
+        FARM_FINGERPRINT(column) MOD modulus AS alias
+
+    This adds a deterministic numeric dimension (0..modulus-1) to the
+    watermark tuple, enabling clean batch boundaries even when the
+    primary cursor (e.g., date) has millions of records per value.
+    """
+    column: str
+    modulus: int = 1000
+    alias: str = "_hash_partition"
+
+
+@dataclass(frozen=True)
 class StagingParams:
     """Parameters for staging SQL generation."""
     target_table: str
@@ -78,6 +94,8 @@ class StagingParams:
     cluster_by: list[str] = field(default_factory=list)
     partition_by: str | None = None  # e.g. "DATE(source_updated_at)"
     partition_cursors: list[PartitionCursor] = field(default_factory=list)
+    cursor_mode: str = "ordered"  # "ordered" or "independent"
+    hash_cursor: HashCursor | None = None
 
 
 def _format_watermark_value(val: Any) -> str:
@@ -97,6 +115,76 @@ def _format_watermark_value(val: Any) -> str:
         pass
     safe = s.replace("'", "''")
     return f"'{safe}'"
+
+
+def _build_ordered_watermark(
+    watermark: dict[str, Any],
+    grace_period_hours: int = 0,
+) -> str:
+    """Build ordered tuple watermark comparison.
+
+    For columns (c1, c2, c3) with values (v1, v2, v3), generates::
+
+        c1 > v1
+        OR (c1 = v1 AND c2 > v2)
+        OR (c1 = v1 AND c2 = v2 AND c3 > v3)
+
+    Grace period is applied only to the first (timestamp) column.
+    """
+    cols = list(watermark.keys())
+    vals = list(watermark.values())
+    clauses: list[str] = []
+
+    for depth in range(len(cols)):
+        eq_parts: list[str] = []
+        for i in range(depth):
+            fv = _format_watermark_value(vals[i])
+            eq_parts.append(f"{cols[i]} = {fv}")
+
+        fv = _format_watermark_value(vals[depth])
+        if depth == 0 and grace_period_hours and grace_period_hours > 0:
+            gt_part = (
+                f"{cols[depth]} > TIMESTAMP_SUB({fv}, "
+                f"INTERVAL {grace_period_hours} HOUR)"
+            )
+        else:
+            gt_part = f"{cols[depth]} > {fv}"
+
+        if eq_parts:
+            clause = " AND ".join(eq_parts) + " AND " + gt_part
+            clauses.append(f"({clause})")
+        else:
+            clauses.append(gt_part)
+
+    return "\n  OR ".join(clauses)
+
+
+def _build_order_by_columns(params: StagingParams) -> list[str]:
+    """Build ORDER BY column list for deterministic batching.
+
+    When using ordered cursor mode with multiple watermark columns,
+    include all watermark columns in the ORDER BY for deterministic
+    batch boundaries. Always ends with entity_uid as tiebreaker.
+    """
+    order_cols: list[str] = []
+
+    if params.watermark and params.cursor_mode == "ordered":
+        # Use watermark columns as primary ordering
+        for col in params.watermark:
+            if col not in order_cols:
+                order_cols.append(col)
+    else:
+        order_cols.append(params.updated_at)
+
+    # Hash cursor alias in ORDER BY
+    if params.hash_cursor and params.hash_cursor.alias not in order_cols:
+        order_cols.append(params.hash_cursor.alias)
+
+    # Entity UID as final tiebreaker
+    if ENTITY_UID not in order_cols:
+        order_cols.append(ENTITY_UID)
+
+    return order_cols
 
 
 def build_staging_sql(params: StagingParams) -> SQLExpression:
@@ -142,6 +230,14 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
     for col in params.passthrough_columns:
         parts.append(f"  {col},")
 
+    # Hash cursor virtual column (if configured)
+    if params.hash_cursor:
+        hc = params.hash_cursor
+        parts.append(
+            f"  MOD(FARM_FINGERPRINT(CAST({hc.column} AS STRING)), {hc.modulus}) "
+            f"AS {hc.alias},"
+        )
+
     # Metadata columns
     parts.append(f"  {params.updated_at} AS {SOURCE_UPDATED_AT},")
     parts.append(f"  CURRENT_TIMESTAMP() AS {PIPELINE_LOADED_AT}")
@@ -162,19 +258,28 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
 
     # Incremental filter with grace period
     if params.watermark and not params.full_refresh:
-        conditions: list[str] = []
-        for col, val in params.watermark.items():
-            formatted_val = _format_watermark_value(val)
-            if params.grace_period_hours and params.grace_period_hours > 0:
-                conditions.append(
-                    f"{col} > TIMESTAMP_SUB({formatted_val}, "
-                    f"INTERVAL {params.grace_period_hours} HOUR)"
-                )
-            else:
-                conditions.append(f"{col} > {formatted_val}")
-        parts.append(f"AND (")
-        parts.append(f"  {' OR '.join(conditions)}")
-        parts.append(f")")
+        if params.cursor_mode == "ordered" and len(params.watermark) > 1:
+            # Ordered tuple comparison: (col1, col2) > (wm1, wm2)
+            # Expands to: col1 > wm1 OR (col1 = wm1 AND col2 > wm2)
+            # For 3+ columns: col1 > wm1 OR (col1 = wm1 AND (col2 > wm2 OR (col2 = wm2 AND col3 > wm3)))
+            parts.append("AND (")
+            parts.append(f"  {_build_ordered_watermark(params.watermark, params.grace_period_hours)}")
+            parts.append(")")
+        else:
+            # Independent (OR) mode — original behavior
+            conditions: list[str] = []
+            for col, val in params.watermark.items():
+                formatted_val = _format_watermark_value(val)
+                if params.grace_period_hours and params.grace_period_hours > 0:
+                    conditions.append(
+                        f"{col} > TIMESTAMP_SUB({formatted_val}, "
+                        f"INTERVAL {params.grace_period_hours} HOUR)"
+                    )
+                else:
+                    conditions.append(f"{col} > {formatted_val}")
+            parts.append(f"AND (")
+            parts.append(f"  {' OR '.join(conditions)}")
+            parts.append(f")")
 
     # Partition cursor filters (AND with time watermark for partition pruning)
     if params.partition_cursors and not params.full_refresh:
@@ -194,7 +299,9 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
 
     # Batch size limit with deterministic ordering
     if params.batch_size:
-        parts.append(f"ORDER BY {params.updated_at}, {ENTITY_UID}")
+        # Build ORDER BY from watermark columns for deterministic batching
+        order_cols = _build_order_by_columns(params)
+        parts.append(f"ORDER BY {', '.join(order_cols)}")
         parts.append(f"LIMIT {params.batch_size}")
 
     return SQLExpression.from_raw("\n".join(parts))

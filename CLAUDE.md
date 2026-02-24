@@ -8,7 +8,7 @@
 **bq-entity-resolution** is a config-driven entity resolution pipeline for BigQuery.
 Python generates SQL; BigQuery (or DuckDB locally) executes it. No data leaves the warehouse.
 
-- **929 tests**, all passing
+- **1,256 tests**, all passing (132 source files, 16,869 LOC)
 - **v0.2.0** — published to PyPI as `bq-entity-resolution`
 - **Python 3.11+** with Pydantic v2, Click, structlog, sqlglot
 
@@ -16,7 +16,7 @@ Python generates SQL; BigQuery (or DuckDB locally) executes it. No data leaves t
 
 ```bash
 # Tests
-python -m pytest tests/ -v                    # 929 tests, ~40s
+python -m pytest tests/ -v                    # 1256 tests, ~40s
 C:/Users/amare/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/ -v  # Windows
 
 # Lint + Type Check
@@ -31,6 +31,10 @@ bq-er validate --config config.yml
 bq-er preview-sql --config config.yml --tier exact --stage all
 bq-er run --config config.yml --dry-run
 bq-er run --config config.yml --full-refresh
+bq-er run --config config.yml --drain              # Process all pending batches
+bq-er profile-cursors --config config.yml           # Recommend cursor strategies
+bq-er profile --config config.yml                   # Profile source data
+bq-er describe --config config.yml                  # Describe pipeline configuration
 ```
 
 ---
@@ -355,24 +359,27 @@ The pipeline follows Google's Application Default Credentials (ADC):
 
 ```
 src/bq_entity_resolution/
-  config/          Pydantic v2 schema, YAML loader, presets, role mapping, validators
+  config/          Pydantic v2 schema (28 models), YAML loader, presets, role mapping, validators
+  config/models/   7 domain-specific config sub-modules (blocking, features, matching, etc.)
   sql/builders/    14 Python SQL builder modules (type-safe, testable)
   sql/             SQLExpression wrapper (sqlglot), utilities
-  features/        Feature function registry (53 functions via @register)
-  matching/        Comparison registry (26 functions), F-S parameters, active learning
+  features/        Feature function registry (60+ functions via @register)
+  matching/        Comparison registry (30+ functions), F-S parameters, active learning
   blocking/        Blocking key validation, LSH bucket logic
   reconciliation/  Clustering descriptions, canonical output logic
   embeddings/      BigQuery ML embedding generation + LSH
   watermark/       Watermark tracking + checkpoint/resume
-  stages/          9 Stage classes (composable DAG nodes)
+  compound/        Compound record detection + splitting (family names, slash-separated)
+  stages/          12 Stage classes in focused modules (clustering, canonical_index, gold_output, etc.)
   pipeline/        Pipeline, StageDAG, Plan, Executor, Validator, Quality Gates
   backends/        Pluggable backends (BigQuery, DuckDB, BQ Emulator)
   profiling/       Column profiling + weight sensitivity analysis
   monitoring/      Structured logging + metrics
   clients/         BigQuery client wrapper with retries
+  tools/           Cursor profiler for incremental processing
   naming.py        Centralized table naming
   columns.py       Centralized column name constants
-  __main__.py      Click CLI entry point
+  __main__.py      Click CLI entry point (13 commands)
 ```
 
 ## Key Patterns
@@ -383,6 +390,8 @@ src/bq_entity_resolution/
 4. **Builder pattern** — Frozen `@dataclass` params + `build_*()` → `SQLExpression`. No templates.
 5. **Plan-Execute split** — `plan()` generates SQL, `run()` executes. Enables preview/testing.
 6. **Checkpoint/resume** — `CheckpointManager` persists stage completion. Pipeline auto-resumes from last completed stage.
+7. **Stage DAG** — Stages declare inputs/outputs as `TableRef`. `StageDAG` resolves execution order via topological sort.
+8. **Incremental processing** — Composite ordered watermarks, drain mode, canonical_index persistence, cross-batch blocking.
 
 ## Adding New Things
 
@@ -396,6 +405,8 @@ src/bq_entity_resolution/
 | Blocking key | YAML config | Add to `feature_engineering.blocking_keys:` |
 | SQL builder | `sql/builders/` | Frozen `@dataclass` + `build_*()` function |
 | Pipeline stage | `stages/` | Subclass `Stage`, implement `plan()` |
+| Backend | `backends/` | Implement `Backend` protocol |
+| Compound pattern | `compound/patterns.py` | Add regex pattern to `COMPOUND_PATTERNS` |
 
 ## Important Files to Read First
 
@@ -403,8 +414,8 @@ src/bq_entity_resolution/
 2. `pipeline/pipeline.py` — Pipeline class (main entry point)
 3. `config/presets.py` — quick_config() and all preset functions
 4. `config/roles.py` — Column role → auto-feature/blocking/comparison mapping
-5. `features/registry.py` — All 53 feature functions
-6. `matching/comparisons.py` — All 26 comparison functions
+5. `features/registry.py` — All 60+ feature functions
+6. `matching/comparisons.py` — All 30+ comparison functions
 7. `naming.py` — All table names
 8. `columns.py` — All column name constants
 9. `config/examples/` — 5 example configs (minimal to production-grade)
@@ -426,6 +437,41 @@ src/bq_entity_resolution/
 - `**_: Any` on registry functions for forward compatibility
 - All SQL builder dataclasses use `frozen=True`
 - All builder functions return `SQLExpression`
+
+## Pipeline Execution Order
+
+```
+watermark read → stage sources (bronze) → engineer features (silver) →
+embeddings + LSH (if enabled) → create UDFs → estimate F-S parameters (if configured) →
+init matches table → init canonical_index (if incremental) →
+tier 1..N (blocking → matching → accumulate) →
+clustering → canonical_index populate (if incremental) →
+gold output → cluster quality metrics →
+active learning review queues (if configured) →
+watermark advance → metrics
+```
+
+## Incremental Processing (15B-record scale)
+
+```yaml
+incremental:
+  enabled: true
+  cursor_columns: [source_date, source_policyid]  # Composite watermark
+  cursor_mode: ordered       # Tuple comparison: (date, id) > (wm_date, wm_id)
+  batch_size: 5_000_000
+  drain_mode: true           # Auto-loop until all records consumed
+  drain_max_iterations: 100  # Safety cap
+```
+
+Key concepts:
+- **Composite ordered watermarks** — Clean batch boundaries even when a single date has 28M+ records
+- **Drain mode** — `--drain` flag or `drain_mode: true` loops until source exhausted
+- **Cross-batch blocking** — New records matched against canonical_index (all historical entities)
+- **Canonical index** — Accumulates all entities with cluster_ids across batches
+- **Cursor profiler** — `bq-er profile-cursors` recommends the best secondary cursor column
+- **Hash cursor fallback** — `FARM_FINGERPRINT(col) MOD N` when no natural secondary cursor exists
+
+See `docs/incremental_processing.md` for full guide and `config/examples/incremental_processing.yml` for example.
 
 ## Known Limitations
 

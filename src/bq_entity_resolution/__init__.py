@@ -12,38 +12,89 @@ Quick start::
     pipeline = Pipeline(config)
     plan = pipeline.plan()
     print(plan.preview())
+
+Extending the pipeline::
+
+    from bq_entity_resolution import (
+        Pipeline, Stage, TableRef, StageDAG, build_pipeline_dag,
+        register_feature, register_comparison,
+    )
+
+    # Register custom feature/comparison functions
+    @register_feature("my_custom_feature")
+    def my_custom_feature(inputs, **_):
+        return f"UPPER(TRIM({inputs[0]}))"
+
+    # Replace or inject stages
+    pipeline = Pipeline(config, stage_overrides={"clustering": MyStage(config)})
+
+    # Or build a fully custom DAG
+    pipeline = Pipeline.from_stages(config, stages=[...], explicit_edges={...})
 """
 
-from bq_entity_resolution.version import __version__
-
-# Core API
-from bq_entity_resolution.pipeline.pipeline import Pipeline
-from bq_entity_resolution.config.schema import PipelineConfig, SourceConfig
+# Backends (for local testing and production)
+from bq_entity_resolution.backends.duckdb import DuckDBBackend
+from bq_entity_resolution.backends.protocol import Backend, QueryResult
 from bq_entity_resolution.config.loader import load_config
 
 # Presets (progressive disclosure)
 from bq_entity_resolution.config.presets import (
-    quick_config,
-    person_dedup_preset,
-    person_linkage_preset,
     business_dedup_preset,
-    insurance_dedup_preset,
     financial_transaction_preset,
     healthcare_patient_preset,
+    insurance_dedup_preset,
+    person_dedup_preset,
+    person_linkage_preset,
+    quick_config,
 )
+
+# Role detection utilities
+from bq_entity_resolution.config.roles import (
+    blocking_keys_for_role,
+    comparisons_for_role,
+    detect_role,
+    features_for_role,
+)
+from bq_entity_resolution.config.schema import PipelineConfig, SourceConfig
 
 # Registries (for custom extensions)
 from bq_entity_resolution.features.registry import (
     FEATURE_FUNCTIONS,
+)
+from bq_entity_resolution.features.registry import (
     register as register_feature,
 )
 from bq_entity_resolution.matching.comparisons import (
+    COMPARISON_COSTS,
     COMPARISON_FUNCTIONS,
+)
+from bq_entity_resolution.matching.comparisons import (
     register as register_comparison,
 )
+from bq_entity_resolution.pipeline.dag import StageDAG, build_pipeline_dag
+from bq_entity_resolution.pipeline.executor import (
+    CheckpointManagerProtocol,
+    PipelineExecutor,
+    PipelineResult,
+    ProgressCallback,
+)
+from bq_entity_resolution.pipeline.gates import (
+    ClusterSizeGate,
+    DataQualityGate,
+    GateResult,
+    OutputNotEmptyGate,
+)
 
-# Backends (for local testing and production)
-from bq_entity_resolution.backends.duckdb import DuckDBBackend
+# Core API
+from bq_entity_resolution.pipeline.pipeline import Pipeline
+from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
+from bq_entity_resolution.pipeline.validator import ContractViolation
+from bq_entity_resolution.sql.expression import SQLExpression
+
+# Extensibility: stages, DAG, gates
+from bq_entity_resolution.stages.base import Stage, StageResult, TableRef
+from bq_entity_resolution.version import __version__
+
 
 # Lazy import for BigQueryBackend (requires google-cloud-bigquery)
 def __getattr__(name: str):
@@ -51,14 +102,6 @@ def __getattr__(name: str):
         from bq_entity_resolution.backends.bigquery import BigQueryBackend
         return BigQueryBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-# Role detection utilities
-from bq_entity_resolution.config.roles import (
-    detect_role,
-    features_for_role,
-    blocking_keys_for_role,
-    comparisons_for_role,
-)
 
 __all__ = [
     "__version__",
@@ -75,12 +118,36 @@ __all__ = [
     "insurance_dedup_preset",
     "financial_transaction_preset",
     "healthcare_patient_preset",
-    # Extensibility
+    # Registries
     "FEATURE_FUNCTIONS",
     "COMPARISON_FUNCTIONS",
+    "COMPARISON_COSTS",
     "register_feature",
     "register_comparison",
+    # Extensibility: stages
+    "Stage",
+    "TableRef",
+    "StageResult",
+    "SQLExpression",
+    # Extensibility: DAG
+    "StageDAG",
+    "build_pipeline_dag",
+    # Extensibility: plan + executor
+    "PipelinePlan",
+    "StagePlan",
+    "PipelineExecutor",
+    "PipelineResult",
+    "ProgressCallback",
+    "CheckpointManagerProtocol",
+    # Extensibility: gates + validation
+    "DataQualityGate",
+    "GateResult",
+    "OutputNotEmptyGate",
+    "ClusterSizeGate",
+    "ContractViolation",
     # Backends
+    "Backend",
+    "QueryResult",
     "DuckDBBackend",
     "BigQueryBackend",
     # Role utilities

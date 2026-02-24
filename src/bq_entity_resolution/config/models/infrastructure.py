@@ -16,6 +16,7 @@ __all__ = [
     "LSHConfig",
     "EmbeddingConfig",
     "PartitionCursorConfig",
+    "HashCursorConfig",
     "IncrementalConfig",
     "MetricsConfig",
     "ProfilingConfig",
@@ -102,15 +103,66 @@ class PartitionCursorConfig(BaseModel):
     value: Optional[Any] = None  # Static value for equality strategy
 
 
+class HashCursorConfig(BaseModel):
+    """Hash-based virtual cursor for tables without a natural secondary column.
+
+    When source tables lack a secondary column suitable for ordered cursor
+    delineation (e.g., no policy_id or sequence number), a hash cursor
+    generates a deterministic virtual partition column:
+
+        FARM_FINGERPRINT(unique_key) MOD 1000 AS _hash_partition
+
+    This creates a numeric dimension (0-999) that, combined with the
+    primary timestamp cursor, enables clean batch boundaries.
+
+    Cost note: hash cursors add a FARM_FINGERPRINT computation per row.
+    Prefer natural columns (cheaper) when they exist.
+
+    Example config::
+
+        incremental:
+          hash_cursor:
+            column: policy_id
+            modulus: 1000
+            alias: _hash_partition
+    """
+
+    column: str = "entity_uid"
+    modulus: int = 1000
+    alias: str = "_hash_partition"
+
+
 class IncrementalConfig(BaseModel):
-    """Incremental processing and watermark configuration."""
+    """Incremental processing and watermark configuration.
+
+    Supports two cursor modes for composite watermarks:
+
+    - ``independent`` (legacy): Each cursor column is compared independently
+      with OR logic. Simple but can re-process or skip records when cursor
+      dimensions are not monotonically aligned.
+
+    - ``ordered`` (recommended): Cursor columns are compared as an ordered
+      tuple: ``(col1, col2) > (wm1, wm2)``. This expands to::
+
+          col1 > wm1 OR (col1 = wm1 AND col2 > wm2)
+
+      This ensures no records are skipped or re-processed, even when
+      a single primary cursor value spans millions of records.
+
+    Drain mode auto-loops through batches until all unprocessed records
+    are consumed, advancing the watermark after each successful batch.
+    """
 
     enabled: bool = True
     grace_period_hours: int = 48
     cursor_columns: list[str] = Field(default_factory=lambda: ["updated_at"])
+    cursor_mode: Literal["independent", "ordered"] = "ordered"
     partition_cursors: list[PartitionCursorConfig] = Field(default_factory=list)
+    hash_cursor: Optional[HashCursorConfig] = None
     batch_size: int = 2_000_000
     full_refresh_on_schema_change: bool = True
+    drain_mode: bool = False
+    drain_max_iterations: int = 100
 
 
 # ---------------------------------------------------------------------------

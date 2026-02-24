@@ -65,6 +65,18 @@ Changelog = "https://github.com/bq-entity-resolution/bq-entity-resolution/blob/m
 [project.scripts]
 bq-er = "bq_entity_resolution.cli.main:cli"
 
+# Entry point groups for plugin discovery.
+# External packages can register custom feature/comparison functions by
+# adding entry points in their own pyproject.toml:
+#
+#   [project.entry-points."bq_er.features"]
+#   my_pkg = "my_pkg.features"     # module with @register_feature decorators
+#
+#   [project.entry-points."bq_er.comparisons"]
+#   my_pkg = "my_pkg.comparisons"  # module with @register_comparison decorators
+[project.entry-points."bq_er.features"]
+[project.entry-points."bq_er.comparisons"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
