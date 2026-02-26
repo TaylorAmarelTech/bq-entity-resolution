@@ -11,9 +11,9 @@ Validates all 5 merge strategies:
 from bq_entity_resolution.sql.builders.golden_record import (
     FieldStrategy,
     GoldenRecordParams,
-    build_golden_record_cte,
     _build_order_by,
     _build_vote_cte,
+    build_golden_record_cte,
 )
 
 

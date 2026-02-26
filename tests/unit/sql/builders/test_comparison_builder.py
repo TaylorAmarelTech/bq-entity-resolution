@@ -3,15 +3,14 @@
 from bq_entity_resolution.sql.builders.comparison import (
     ComparisonDef,
     ComparisonLevel,
+    FellegiSunterParams,
     HardNegative,
     SoftSignal,
-    Threshold,
     SumScoringParams,
-    FellegiSunterParams,
-    build_sum_scoring_sql,
+    Threshold,
     build_fellegi_sunter_sql,
+    build_sum_scoring_sql,
 )
-
 
 # -- Sum-based scoring tests --
 
@@ -54,9 +53,9 @@ def test_sum_scoring_hard_negative_disqualify():
     params = SumScoringParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[ComparisonDef(name="x", sql_expr="l.x = r.x", weight=1.0)],
         hard_negatives=[
             HardNegative(
@@ -78,9 +77,9 @@ def test_sum_scoring_hard_negative_penalize():
     params = SumScoringParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[ComparisonDef(name="x", sql_expr="l.x = r.x", weight=1.0)],
         hard_negatives=[
             HardNegative(
@@ -103,9 +102,9 @@ def test_sum_scoring_soft_signal():
     params = SumScoringParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[ComparisonDef(name="x", sql_expr="l.x = r.x", weight=1.0)],
         soft_signals=[
             SoftSignal(sql_condition="l.zip = r.zip", bonus=0.5),
@@ -124,9 +123,9 @@ def test_sum_scoring_fixed_confidence():
     params = SumScoringParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[ComparisonDef(name="x", sql_expr="l.x = r.x", weight=1.0)],
         confidence=0.99,
         threshold=Threshold(min_score=0.5),
@@ -142,9 +141,9 @@ def test_sum_scoring_tf_adjusted():
     params = SumScoringParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="last",
@@ -172,9 +171,9 @@ def test_sum_scoring_audit_trail():
     params = SumScoringParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[ComparisonDef(name="x", sql_expr="l.x = r.x", weight=1.0)],
         threshold=Threshold(min_score=0.5),
         audit_trail_enabled=True,
@@ -237,9 +236,9 @@ def test_fs_scoring_overflow_clamp():
     params = FellegiSunterParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="x",
@@ -263,9 +262,9 @@ def test_fs_scoring_null_coalesce():
     params = FellegiSunterParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="x",
@@ -289,9 +288,9 @@ def test_fs_scoring_tf_adjusted():
     params = FellegiSunterParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="last",
@@ -327,9 +326,9 @@ def test_fs_scoring_uses_match_threshold():
     params = FellegiSunterParams(
         tier_name="t1",
         tier_index=0,
-        matches_table="m",
-        candidates_table="c",
-        source_table="f",
+        matches_table="p.d.matches",
+        candidates_table="p.d.candidates",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="x",

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from bq_entity_resolution.sql.builders.watermark import (
+    build_create_checkpoint_table_sql,
     build_create_watermark_table_sql,
     build_read_watermark_sql,
     build_update_watermark_sql,
-    build_create_checkpoint_table_sql,
 )
 
 
@@ -20,7 +20,7 @@ class TestBuildCreateWatermarkTableSql:
         assert "proj.meta.watermarks" in sql
 
     def test_includes_required_columns(self):
-        sql = build_create_watermark_table_sql("t").render()
+        sql = build_create_watermark_table_sql("proj.meta.watermarks").render()
         assert "source_name STRING" in sql
         assert "cursor_column STRING" in sql
         assert "cursor_value STRING" in sql
@@ -30,7 +30,7 @@ class TestBuildCreateWatermarkTableSql:
         assert "is_current BOOL" in sql
 
     def test_includes_partitioning_and_clustering(self):
-        sql = build_create_watermark_table_sql("t").render()
+        sql = build_create_watermark_table_sql("proj.meta.watermarks").render()
         assert "PARTITION BY DATE(updated_at)" in sql
         assert "CLUSTER BY source_name" in sql
 
@@ -45,12 +45,12 @@ class TestBuildReadWatermarkSql:
         assert "cursor_column" in sql
 
     def test_filters_by_source_and_current(self):
-        sql = build_read_watermark_sql("t", "my_source").render()
+        sql = build_read_watermark_sql("proj.meta.watermarks", "my_source").render()
         assert "source_name = 'my_source'" in sql
         assert "is_current = TRUE" in sql
 
     def test_escapes_source_name(self):
-        sql = build_read_watermark_sql("t", "it's_a_source").render()
+        sql = build_read_watermark_sql("proj.meta.watermarks", "it's_a_source").render()
         assert "it''s_a_source" in sql
 
 
@@ -61,7 +61,11 @@ class TestBuildUpdateWatermarkSql:
         result = build_update_watermark_sql(
             table="proj.meta.watermarks",
             source_name="customers",
-            cursors=[{"column": "updated_at", "value": "2024-01-01T00:00:00Z", "type": "timestamp"}],
+            cursors=[{
+                "column": "updated_at",
+                "value": "2024-01-01T00:00:00Z",
+                "type": "timestamp",
+            }],
             run_id="run-123",
             now="2024-01-02T00:00:00Z",
         )
@@ -71,7 +75,7 @@ class TestBuildUpdateWatermarkSql:
 
     def test_marks_old_watermarks_not_current(self):
         sql = build_update_watermark_sql(
-            table="t",
+            table="proj.meta.watermarks",
             source_name="src",
             cursors=[{"column": "c", "value": "v", "type": "t"}],
             run_id="r",
@@ -82,7 +86,7 @@ class TestBuildUpdateWatermarkSql:
 
     def test_inserts_new_watermark_values(self):
         sql = build_update_watermark_sql(
-            table="t",
+            table="proj.meta.watermarks",
             source_name="src",
             cursors=[
                 {"column": "col1", "value": "val1", "type": "string"},
@@ -99,7 +103,7 @@ class TestBuildUpdateWatermarkSql:
 
     def test_escapes_values(self):
         sql = build_update_watermark_sql(
-            table="t",
+            table="proj.meta.watermarks",
             source_name="it's",
             cursors=[{"column": "c", "value": "val'ue", "type": "t"}],
             run_id="run's",
@@ -120,13 +124,13 @@ class TestBuildCreateCheckpointTableSql:
         assert "proj.meta.checkpoints" in sql
 
     def test_includes_required_columns(self):
-        sql = build_create_checkpoint_table_sql("t").render()
+        sql = build_create_checkpoint_table_sql("proj.meta.checkpoints").render()
         assert "run_id STRING" in sql
         assert "stage_name STRING" in sql
         assert "completed_at TIMESTAMP" in sql
         assert "status STRING" in sql
 
     def test_includes_partitioning_and_clustering(self):
-        sql = build_create_checkpoint_table_sql("t").render()
+        sql = build_create_checkpoint_table_sql("proj.meta.checkpoints").render()
         assert "PARTITION BY DATE(completed_at)" in sql
         assert "CLUSTER BY run_id" in sql

@@ -10,7 +10,6 @@ from typing import Any
 
 from bq_entity_resolution.matching.comparisons import register
 
-
 # ---------------------------------------------------------------------------
 # Hard negative helpers
 # ---------------------------------------------------------------------------

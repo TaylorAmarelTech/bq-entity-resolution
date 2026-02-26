@@ -16,3 +16,5 @@ secrets/
 .venv/
 venv/
 .claude/
+.coverage
+--help

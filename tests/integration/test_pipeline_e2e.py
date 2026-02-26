@@ -10,7 +10,6 @@ from bq_entity_resolution.config.presets import quick_config
 from bq_entity_resolution.pipeline.pipeline import Pipeline
 from bq_entity_resolution.pipeline.validator import ContractViolation
 
-
 # -- Fixtures --
 
 

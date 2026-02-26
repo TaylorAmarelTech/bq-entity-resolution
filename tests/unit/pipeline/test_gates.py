@@ -1,16 +1,13 @@
 """Tests for data quality gates."""
 
-import pytest
 
-from bq_entity_resolution.stages.base import TableRef
 from bq_entity_resolution.pipeline.gates import (
+    ClusterSizeGate,
     GateResult,
     OutputNotEmptyGate,
-    ClusterSizeGate,
     default_gates,
 )
-from bq_entity_resolution.backends.protocol import QueryResult
-
+from bq_entity_resolution.stages.base import TableRef
 
 # -- Mock backend --
 

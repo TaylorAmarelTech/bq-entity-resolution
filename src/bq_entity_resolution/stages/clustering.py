@@ -7,23 +7,32 @@ as singletons before propagating minimum cluster_id through match edges.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.naming import (
     all_matches_table,
     canonical_index_table,
-    cluster_table as _cluster_table,
     featured_table,
 )
+from bq_entity_resolution.naming import (
+    cluster_table as _cluster_table,
+)
 from bq_entity_resolution.sql.builders.clustering import (
+    BestMatchClusteringParams,
     ClusteringParams,
     IncrementalClusteringParams,
+    StarClusteringParams,
+    build_best_match_cluster_sql,
     build_cluster_assignment_sql,
     build_incremental_cluster_sql,
+    build_star_cluster_sql,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class ClusteringStage(Stage):
@@ -80,27 +89,63 @@ class ClusteringStage(Stage):
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate cluster assignment SQL.
 
+        Selects algorithm based on config:
+        - connected_components: Iterative minimum-propagation (default).
+        - star: Single-pass highest-score center election.
+        - best_match: Each entity joins its single best match's cluster.
+
         Uses incremental clustering when incremental processing is enabled,
         which initializes from canonical_index + new singletons.
         """
-        max_iter = getattr(
-            self._config.reconciliation.clustering, "max_iterations", 20
-        )
+        clustering_cfg = self._config.reconciliation.clustering
+        method = getattr(clustering_cfg, "method", "connected_components")
+        max_iter = getattr(clustering_cfg, "max_iterations", 20)
 
-        if self._is_incremental:
+        logger.info(
+            "Clustering match pairs using method '%s' (max_iterations=%d)",
+            method,
+            max_iter,
+        )
+        min_conf = getattr(clustering_cfg, "min_cluster_confidence", 0.0)
+
+        matches_tbl = self.inputs["all_matches"].fq_name
+        cluster_tbl = self.outputs["clusters"].fq_name
+        source_tbl = self.inputs["featured"].fq_name
+
+        # Incremental mode only supported for connected_components
+        if self._is_incremental and method == "connected_components":
             params = IncrementalClusteringParams(
-                all_matches_table=self.inputs["all_matches"].fq_name,
-                cluster_table=self.outputs["clusters"].fq_name,
-                source_table=self.inputs["featured"].fq_name,
+                all_matches_table=matches_tbl,
+                cluster_table=cluster_tbl,
+                source_table=source_tbl,
                 canonical_table=self.inputs["canonical_index"].fq_name,
                 max_iterations=max_iter,
             )
             return [build_incremental_cluster_sql(params)]
 
-        params = ClusteringParams(
-            all_matches_table=self.inputs["all_matches"].fq_name,
-            cluster_table=self.outputs["clusters"].fq_name,
-            source_table=self.inputs["featured"].fq_name,
+        if method == "star":
+            params_star = StarClusteringParams(
+                all_matches_table=matches_tbl,
+                cluster_table=cluster_tbl,
+                source_table=source_tbl,
+                min_confidence=min_conf,
+            )
+            return [build_star_cluster_sql(params_star)]
+
+        if method == "best_match":
+            params_bm = BestMatchClusteringParams(
+                all_matches_table=matches_tbl,
+                cluster_table=cluster_tbl,
+                source_table=source_tbl,
+                min_confidence=min_conf,
+            )
+            return [build_best_match_cluster_sql(params_bm)]
+
+        # Default: connected_components
+        params_cc = ClusteringParams(
+            all_matches_table=matches_tbl,
+            cluster_table=cluster_tbl,
+            source_table=source_tbl,
             max_iterations=max_iter,
         )
-        return [build_cluster_assignment_sql(params)]
+        return [build_cluster_assignment_sql(params_cc)]

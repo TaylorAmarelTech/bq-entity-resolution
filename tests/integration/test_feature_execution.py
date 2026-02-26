@@ -30,7 +30,22 @@ def db():
             ssn VARCHAR,
             company_name VARCHAR,
             latitude DOUBLE,
-            longitude DOUBLE
+            longitude DOUBLE,
+            vin VARCHAR,
+            policy_number VARCHAR,
+            iban VARCHAR,
+            routing_number VARCHAR,
+            account_number VARCHAR,
+            amount DOUBLE,
+            npi VARCHAR,
+            dea_number VARCHAR,
+            mrn VARCHAR,
+            icd_code VARCHAR,
+            ein VARCHAR,
+            duns VARCHAR,
+            ticker VARCHAR,
+            cusip VARCHAR,
+            license_number VARCHAR
         )
     """)
     backend.execute("""
@@ -39,7 +54,11 @@ def db():
             'John.Smith@Example.COM', '(555) 123-4567',
             '123 Main St. Apt. 4B', 'New York', 'NY', '10001-2345',
             '1990-01-15', '123-45-6789', 'Acme Corp, Inc.',
-            40.7128, -74.0060
+            40.7128, -74.0060,
+            '1HGBH41JXMN109186', 'POL-00012345', 'GB29NWBK60161331926819',
+            '021000021', '0001234567', 15250.75,
+            '1234567890', 'AB1234567', 'MRN-00098765', 'M54.5',
+            '12-3456789', '123456789', 'AAPL', '037833100', 'DL-A1234567'
         )
     """)
 
@@ -102,6 +121,29 @@ _FEATURE_TEST_ARGS: dict[str, tuple[list[str], dict]] = {
     "geo_hash": (["latitude", "longitude"], {}),
     "lat_lon_bucket": (["latitude", "longitude"], {}),
     "haversine_distance": (["latitude", "longitude", "latitude", "longitude"], {}),
+    # Utility features
+    "remove_diacritics": (["first_name"], {}),
+    "normalize_whitespace": (["address"], {}),
+    # Industry: Insurance
+    "vin_normalize": (["vin"], {}),
+    "vin_last_six": (["vin"], {}),
+    "policy_number_clean": (["policy_number"], {}),
+    # Industry: Banking
+    "iban_normalize": (["iban"], {}),
+    "routing_number_clean": (["routing_number"], {}),
+    "account_number_clean": (["account_number"], {}),
+    "amount_bucket": (["amount"], {"bucket_size": 100}),
+    # Industry: Healthcare
+    "npi_validate": (["npi"], {}),
+    "dea_number_clean": (["dea_number"], {}),
+    "mrn_clean": (["mrn"], {}),
+    "icd_code_normalize": (["icd_code"], {}),
+    # Industry: Business
+    "ein_format": (["ein"], {}),
+    "duns_clean": (["duns"], {}),
+    "ticker_normalize": (["ticker"], {}),
+    "cusip_clean": (["cusip"], {}),
+    "license_number_clean": (["license_number"], {}),
 }
 
 # Functions requiring geo extensions

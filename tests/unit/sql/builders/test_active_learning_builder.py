@@ -61,8 +61,8 @@ def test_active_learning_sum_zero_threshold():
 def test_active_learning_returns_sql_expression():
     """Builder returns SQLExpression."""
     params = ActiveLearningParams(
-        review_table="r",
-        matches_table="m",
+        review_table="p.d.review",
+        matches_table="p.d.matches",
     )
     expr = build_active_learning_sql(params)
     assert expr.is_raw is True

@@ -87,4 +87,5 @@ class TestValidateTableRef:
             validate_table_ref("project.dataset.table;DROP")
 
     def test_underscores_in_all_parts(self):
-        assert validate_table_ref("my_project.my_dataset.my_table") == "my_project.my_dataset.my_table"
+        result = validate_table_ref("my_project.my_dataset.my_table")
+        assert result == "my_project.my_dataset.my_table"

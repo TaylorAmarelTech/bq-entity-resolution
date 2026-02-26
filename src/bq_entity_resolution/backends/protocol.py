@@ -64,6 +64,12 @@ class Backend(Protocol):
     Implementations:
     - BigQueryBackend: production execution with retries and job labels
     - DuckDBBackend: local development and testing with BQ function shims
+
+    All backends support context manager protocol for deterministic
+    resource cleanup::
+
+        with BigQueryBackend(project="my-project") as backend:
+            result = pipeline.run(backend=backend)
     """
 
     @property
@@ -97,4 +103,24 @@ class Backend(Protocol):
 
     def row_count(self, table_ref: str) -> int:
         """Quick row count for a table."""
+        ...
+
+    def estimate_bytes(self, sql: str, label: str = "") -> int:
+        """Estimate bytes that would be processed without executing (dry-run).
+
+        Returns 0 if the backend does not support cost estimation.
+        Used by Pipeline.estimate_cost() for pre-execution cost checks.
+        """
+        ...
+
+    def close(self) -> None:
+        """Release resources held by this backend."""
+        ...
+
+    def __enter__(self) -> Backend:
+        """Enter context manager."""
+        ...
+
+    def __exit__(self, *args: object) -> None:
+        """Exit context manager, calling close()."""
         ...

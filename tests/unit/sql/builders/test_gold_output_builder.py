@@ -125,8 +125,8 @@ def test_gold_output_partition_and_cluster():
     assert "CLUSTER BY source_name, cluster_id" in sql
 
 
-def test_gold_output_entity_id_prefix():
-    """Custom entity ID prefix."""
+def test_gold_output_resolved_entity_id_is_int64():
+    """resolved_entity_id is kept as INT64 (cluster_id) for efficient joins."""
     params = GoldOutputParams(
         target_table="proj.ds.resolved",
         source_table="proj.ds.featured",
@@ -138,7 +138,9 @@ def test_gold_output_entity_id_prefix():
     expr = build_gold_output_sql(params)
     sql = expr.render()
 
-    assert "'cust_'" in sql
+    # resolved_entity_id should be INT64 cluster_id, not a string-concatenated prefix
+    assert "cluster_id AS resolved_entity_id" in sql
+    assert "CAST(" not in sql or "CAST(cl.cluster_id AS STRING)" not in sql
 
 
 def test_gold_output_passthrough_columns():

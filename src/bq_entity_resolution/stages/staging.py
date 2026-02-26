@@ -6,6 +6,7 @@ Uses the staging SQL builder for SQL generation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig, SourceConfig
@@ -17,6 +18,8 @@ from bq_entity_resolution.sql.builders.staging import (
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class StagingStage(Stage):
@@ -62,6 +65,7 @@ class StagingStage(Stage):
             watermark: dict[str, Any] | None
             full_refresh: bool
         """
+        logger.debug("Planning %s stage", self.__class__.__name__)
         watermark = kwargs.get("watermark")
         full_refresh = kwargs.get("full_refresh", False)
         source = self._source

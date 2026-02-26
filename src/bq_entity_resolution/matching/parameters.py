@@ -11,15 +11,14 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any
 
 from bq_entity_resolution.config.schema import (
-    ComparisonDef,
     MatchingTierConfig,
     PipelineConfig,
     TrainingConfig,
 )
 from bq_entity_resolution.exceptions import ParameterEstimationError
+from bq_entity_resolution.matching.comparisons import _validated_call
 from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
 from bq_entity_resolution.naming import (
     candidates_table,
@@ -256,7 +255,7 @@ class ParameterEstimator:
                                 f"Unknown comparison method '{lvl.method}'"
                             )
                         params = {**lvl.params, "udf_dataset": udf_ds}
-                        sql_expr = func(comp.left, comp.right, **params)
+                        sql_expr = _validated_call(func, comp.left, comp.right, **params)
                         levels.append({
                             "label": lvl.label,
                             "sql_expr": sql_expr,
@@ -276,7 +275,7 @@ class ParameterEstimator:
                         f"Unknown comparison method '{comp.method}'"
                     )
                 params = {**comp.params, "udf_dataset": udf_ds}
-                sql_expr = func(comp.left, comp.right, **params)
+                sql_expr = _validated_call(func, comp.left, comp.right, **params)
                 levels = [
                     {"label": "match", "sql_expr": sql_expr, "has_expr": True},
                     {"label": "else", "sql_expr": None, "has_expr": False},
@@ -295,18 +294,22 @@ class ParameterEstimator:
         self, params: TierParameters, target_table: str
     ) -> str:
         """Generate SQL to persist estimated parameters to a table."""
+        from bq_entity_resolution.sql.utils import sql_escape
+
         rows = []
         for cp in params.comparisons:
             for lvl in cp.levels:
                 m = lvl["m"]
                 u = lvl["u"]
                 log_w = math.log2(max(0.001, m) / max(0.001, u))
+                safe_name = sql_escape(cp.comparison_name)
+                safe_label = sql_escape(lvl['label'])
                 rows.append(
                     f"  STRUCT<comparison_name STRING, level_label STRING, "
                     f"m_probability FLOAT64, u_probability FLOAT64, "
                     f"log_weight FLOAT64, prior_match_prob FLOAT64, "
                     f"estimated_at TIMESTAMP>"
-                    f"('{cp.comparison_name}', '{lvl['label']}', "
+                    f"('{safe_name}', '{safe_label}', "
                     f"{m}, {u}, {round(log_w, 6)}, "
                     f"{round(params.prior_match_prob, 6)}, CURRENT_TIMESTAMP())"
                 )

@@ -90,6 +90,13 @@ class CursorProfiler:
         Returns:
             List of CursorProfileResult sorted by score (best first).
         """
+        from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
+
+        validate_table_ref(table)
+        validate_identifier(primary_cursor, context="primary cursor column")
+        for col in candidate_columns:
+            validate_identifier(col, context="candidate cursor column")
+
         results: list[CursorProfileResult] = []
 
         for col in candidate_columns:
@@ -130,6 +137,12 @@ class CursorProfiler:
         Returns:
             List of HashCursorProfileResult sorted by score.
         """
+        from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
+
+        validate_table_ref(table)
+        validate_identifier(hash_column, context="hash cursor column")
+        validate_identifier(primary_cursor, context="primary cursor column")
+
         if modulus_values is None:
             modulus_values = [100, 500, 1000]
 
@@ -282,13 +295,22 @@ class CursorProfiler:
 
         # Generate recommendation
         if score >= 0.7:
-            rec = f"Excellent cursor — high cardinality ({total_distinct:,}) and uniform distribution"
+            rec = (
+                f"Excellent cursor — high cardinality"
+                f" ({total_distinct:,}) and uniform distribution"
+            )
         elif score >= 0.5:
             rec = f"Good cursor — adequate cardinality ({total_distinct:,})"
         elif score >= 0.3:
-            rec = f"Marginal cursor — low cardinality ({total_distinct:,}), consider hash fallback"
+            rec = (
+                f"Marginal cursor — low cardinality"
+                f" ({total_distinct:,}), consider hash fallback"
+            )
         else:
-            rec = f"Poor cursor — very low cardinality ({total_distinct:,}), use hash cursor instead"
+            rec = (
+                f"Poor cursor — very low cardinality"
+                f" ({total_distinct:,}), use hash cursor instead"
+            )
 
         return CursorProfileResult(
             column=column,
@@ -349,7 +371,7 @@ class CursorProfiler:
         if score >= 0.7:
             rec = f"Good hash cursor — max bucket ({max_per_bucket:,}) fits within batch_size"
         elif score >= 0.4:
-            rec = f"Acceptable hash cursor — some buckets exceed batch_size"
+            rec = "Acceptable hash cursor — some buckets exceed batch_size"
         else:
             rec = f"Poor fit — increase modulus to reduce max bucket size ({max_per_bucket:,})"
 

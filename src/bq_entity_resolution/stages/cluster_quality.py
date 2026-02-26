@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.naming import (
     all_matches_table,
+)
+from bq_entity_resolution.naming import (
     cluster_table as _cluster_table,
 )
 from bq_entity_resolution.sql.builders.clustering import (
@@ -15,6 +18,8 @@ from bq_entity_resolution.sql.builders.clustering import (
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class ClusterQualityStage(Stage):
@@ -42,6 +47,7 @@ class ClusterQualityStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate cluster quality metrics SQL."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         params = ClusterMetricsParams(
             cluster_table=self.inputs["clusters"].fq_name,
             matches_table=self.inputs["all_matches"].fq_name,

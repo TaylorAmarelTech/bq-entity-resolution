@@ -7,11 +7,18 @@ enrichment joins, and the top-level feature engineering config.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+import re
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from bq_entity_resolution.config.models.source import JoinConfig
+from bq_entity_resolution.sql.utils import validate_identifier
+
+_SQL_INJECTION_PATTERN = re.compile(
+    r";\s*|--\s|/\*|\bDROP\b|\bALTER\b|\bCREATE\b|\bTRUNCATE\b|\bGRANT\b|\bREVOKE\b",
+    re.IGNORECASE,
+)
 
 __all__ = [
     "FeatureDef",
@@ -29,18 +36,55 @@ class FeatureDef(BaseModel):
 
     name: str
     function: str  # registered function name (e.g. 'name_clean', 'soundex')
-    input: Optional[str] = None  # single-input functions
-    inputs: Optional[list[str]] = None  # multi-input functions
+    input: str | None = None  # single-input functions
+    inputs: list[str] | None = None  # multi-input functions
     params: dict[str, Any] = Field(default_factory=dict)
-    sql: Optional[str] = None  # raw SQL override (for custom features)
+    sql: str | None = None  # raw SQL override (for custom features)
     depends_on: list[str] = Field(default_factory=list)
-    join: Optional[JoinConfig] = None
+    join: JoinConfig | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name_identifier(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        validate_identifier(v, context="feature name")
+        return v
+
+    @field_validator("function")
+    @classmethod
+    def _non_empty_function(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("sql")
+    @classmethod
+    def _validate_sql_safe(cls, v: str | None) -> str | None:
+        if v is not None and _SQL_INJECTION_PATTERN.search(v):
+            raise ValueError(
+                "sql expression contains disallowed SQL pattern "
+                "(semicolons, comments, or DDL keywords)"
+            )
+        return v
 
     @model_validator(mode="after")
-    def _normalize_input(self) -> "FeatureDef":
+    def _normalize_input(self) -> FeatureDef:
         """Normalize singular 'input' into 'inputs' list."""
         if self.input and not self.inputs:
             object.__setattr__(self, "inputs", [self.input])
+        return self
+
+    @model_validator(mode="after")
+    def _validate_inputs_identifiers(self) -> FeatureDef:
+        """Validate that input column names are safe SQL identifiers."""
+        if self.sql:
+            return self  # Raw SQL bypasses validation
+        for col in self.inputs or []:
+            try:
+                validate_identifier(col, context="feature input")
+            except ValueError as e:
+                raise ValueError(str(e)) from e
         return self
 
 
@@ -58,6 +102,28 @@ class BlockingKeyDef(BaseModel):
     function: str  # farm_fingerprint, farm_fingerprint_concat, etc.
     inputs: list[str]
 
+    @field_validator("name")
+    @classmethod
+    def _validate_name_identifier(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        validate_identifier(v, context="blocking key name")
+        return v
+
+    @field_validator("function")
+    @classmethod
+    def _non_empty_function(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("inputs")
+    @classmethod
+    def _validate_input_identifiers(cls, v: list[str]) -> list[str]:
+        for col in v:
+            validate_identifier(col, context="blocking key input")
+        return v
+
 
 class CompositeKeyDef(BaseModel):
     """A composite key for exact-match tiers."""
@@ -65,6 +131,28 @@ class CompositeKeyDef(BaseModel):
     name: str
     function: str
     inputs: list[str]
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name_identifier(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        validate_identifier(v, context="composite key name")
+        return v
+
+    @field_validator("function")
+    @classmethod
+    def _non_empty_function(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("inputs")
+    @classmethod
+    def _validate_input_identifiers(cls, v: list[str]) -> list[str]:
+        for col in v:
+            validate_identifier(col, context="composite key input")
+        return v
 
 
 class EnrichmentJoinConfig(BaseModel):
@@ -105,6 +193,13 @@ class EnrichmentJoinConfig(BaseModel):
     match_flag: str = ""  # If set, auto-generates a 0/1 INT64 match flag column
     type: Literal["LEFT", "INNER"] = "LEFT"
 
+    @field_validator("name", "table", "lookup_key")
+    @classmethod
+    def _non_empty_string(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
 
 class CompoundDetectionConfig(BaseModel):
     """Compound record detection and handling configuration.
@@ -125,6 +220,12 @@ class CompoundDetectionConfig(BaseModel):
     flag_column: str = "is_compound_name"
     custom_patterns: list[str] = Field(default_factory=list)
 
+    @field_validator("name_column", "last_name_column", "flag_column")
+    @classmethod
+    def _validate_column_identifiers(cls, v: str) -> str:
+        validate_identifier(v, context="compound detection column")
+        return v
+
 
 class FeatureEngineeringConfig(BaseModel):
     """All feature engineering configuration."""
@@ -140,6 +241,14 @@ class FeatureEngineeringConfig(BaseModel):
     compound_detection: CompoundDetectionConfig = Field(
         default_factory=CompoundDetectionConfig
     )
+    entity_type_column: str = ""  # Feature column for entity type gating
+
+    @field_validator("entity_type_column")
+    @classmethod
+    def _validate_entity_type_column(cls, v: str) -> str:
+        if v:
+            validate_identifier(v, context="entity_type_column")
+        return v
 
     def all_groups(self) -> list[FeatureGroupConfig]:
         """Return all feature groups (built-in + extra) for iteration."""
@@ -148,7 +257,11 @@ class FeatureEngineeringConfig(BaseModel):
         return groups
 
     def all_feature_names(self) -> set[str]:
-        """Return all feature names across all groups + custom features."""
+        """Return all feature names across all groups + custom features.
+
+        Includes auto-injected compound detection columns and enrichment
+        join output columns so validators can resolve them.
+        """
         names: set[str] = set()
         for group in self.all_groups():
             for feat in group.features:
@@ -159,4 +272,14 @@ class FeatureEngineeringConfig(BaseModel):
             names.add(bk.name)
         for ck in self.composite_keys:
             names.add(ck.name)
+        # Auto-injected compound detection columns
+        if self.compound_detection.enabled:
+            names.add(self.compound_detection.flag_column)
+            names.add("compound_pattern")
+        # Enrichment join output columns (with prefix applied)
+        for ej in self.enrichment_joins:
+            for col in ej.columns:
+                names.add(f"{ej.column_prefix}{col}")
+            if ej.match_flag:
+                names.add(ej.match_flag)
         return names

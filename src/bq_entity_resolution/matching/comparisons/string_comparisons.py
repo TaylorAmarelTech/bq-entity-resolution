@@ -14,7 +14,6 @@ from bq_entity_resolution.matching.comparisons import (
     register,
 )
 
-
 # ---------------------------------------------------------------------------
 # Exact matching
 # ---------------------------------------------------------------------------
@@ -53,6 +52,27 @@ def exact_ci(left: str, right: str, **_: Any) -> str:
 def exact_or_null(left: str, right: str, **_: Any) -> str:
     """Match if equal or if either is null (permissive)."""
     return f"(l.{left} = r.{right} OR l.{left} IS NULL OR r.{right} IS NULL)"
+
+
+@register("exact_diacritics_insensitive")
+def exact_diacritics_insensitive(left: str, right: str, **_: Any) -> str:
+    """Exact match after stripping diacritics (accented characters).
+
+    Handles international names: "Muller" = "Muller", "Jose" = "Jose".
+    Uses NORMALIZE + REGEXP_REPLACE to strip combining marks (NFD form).
+
+    COST: 5 -- Unicode normalization + regex per pair.
+    Pre-compute remove_diacritics() as a feature for better performance.
+    """
+    def _strip(col: str) -> str:
+        return (
+            f"REGEXP_REPLACE(NORMALIZE({col}, NFD), "
+            f"r'\\\\p{{M}}', '')"
+        )
+    return (
+        f"(UPPER({_strip(f'l.{left}')}) = UPPER({_strip(f'r.{right}')}) "
+        f"AND l.{left} IS NOT NULL AND r.{right} IS NOT NULL)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +121,90 @@ def levenshtein_score(left: str, right: str, **_: Any) -> str:
         f"CASE WHEN l.{left} IS NOT NULL AND r.{right} IS NOT NULL "
         f"THEN 1.0 - SAFE_DIVIDE("
         f"CAST(EDIT_DISTANCE(l.{left}, r.{right}) AS FLOAT64), "
+        f"GREATEST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right}))) "
+        f"ELSE 0.0 END"
+    )
+
+
+@register("levenshtein_length_aware")
+def levenshtein_length_aware(
+    left: str, right: str, threshold: float = 0.8, **_: Any
+) -> str:
+    """Length-aware normalized edit distance similarity >= threshold.
+
+    Unlike ``levenshtein_normalized`` which divides by GREATEST(len_l, len_r),
+    this divides by the LEAST (shorter string). This is stricter: a 2-char
+    edit on a 4-char string (50%) is penalized more than on a 20-char string (10%).
+
+    Use this when short strings should require near-exact matches but long
+    strings can tolerate more edits. Particularly important for names where
+    "Jo" vs "Joe" (1 edit / 2 chars = 50% error) is much less reliable than
+    "Christopher" vs "Christophor" (1 edit / 11 chars = 9% error).
+
+    COST: 12 -- same as levenshtein_normalized.
+    """
+    return (
+        f"(1.0 - SAFE_DIVIDE("
+        f"CAST(EDIT_DISTANCE(l.{left}, r.{right}) AS FLOAT64), "
+        f"LEAST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right}))"
+        f") >= {threshold} "
+        f"AND l.{left} IS NOT NULL AND r.{right} IS NOT NULL "
+        f"AND CHAR_LENGTH(l.{left}) > 0 AND CHAR_LENGTH(r.{right}) > 0)"
+    )
+
+
+@register("levenshtein_length_aware_score")
+def levenshtein_length_aware_score(left: str, right: str, **_: Any) -> str:
+    """Length-aware normalized edit distance as a score.
+
+    Divides by LEAST(len_l, len_r) — stricter than levenshtein_score
+    which divides by GREATEST. A 2-char edit on a 3-char string scores
+    much lower (0.33) than on a 20-char string (0.90).
+
+    COST: 12.
+    """
+    return (
+        f"CASE WHEN l.{left} IS NOT NULL AND r.{right} IS NOT NULL "
+        f"AND CHAR_LENGTH(l.{left}) > 0 AND CHAR_LENGTH(r.{right}) > 0 "
+        f"THEN 1.0 - SAFE_DIVIDE("
+        f"CAST(EDIT_DISTANCE(l.{left}, r.{right}) AS FLOAT64), "
+        f"LEAST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right}))) "
+        f"ELSE 0.0 END"
+    )
+
+
+@register("length_ratio")
+def length_ratio(left: str, right: str, threshold: float = 0.6, **_: Any) -> str:
+    """String length ratio check: LEAST(len) / GREATEST(len) >= threshold.
+
+    A fast pre-filter to eliminate pairs with very different string lengths
+    before running expensive edit distance or Jaro-Winkler. Names of very
+    different lengths (e.g., "Al" vs "Alexander") rarely refer to the same
+    entity.
+
+    COST: 2 -- only CHAR_LENGTH + division, no character comparison.
+    """
+    return (
+        f"(SAFE_DIVIDE("
+        f"CAST(LEAST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right})) AS FLOAT64), "
+        f"GREATEST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right}))"
+        f") >= {threshold} "
+        f"AND l.{left} IS NOT NULL AND r.{right} IS NOT NULL)"
+    )
+
+
+@register("length_ratio_score")
+def length_ratio_score(left: str, right: str, **_: Any) -> str:
+    """String length ratio as a score: LEAST(len) / GREATEST(len).
+
+    Returns 1.0 for equal lengths, decreasing as lengths diverge.
+
+    COST: 2.
+    """
+    return (
+        f"CASE WHEN l.{left} IS NOT NULL AND r.{right} IS NOT NULL "
+        f"THEN SAFE_DIVIDE("
+        f"CAST(LEAST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right})) AS FLOAT64), "
         f"GREATEST(CHAR_LENGTH(l.{left}), CHAR_LENGTH(r.{right}))) "
         f"ELSE 0.0 END"
     )

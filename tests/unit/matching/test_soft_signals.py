@@ -2,8 +2,8 @@
 
 import pytest
 
-from bq_entity_resolution.matching.soft_signals import build_soft_signal_expr
 from bq_entity_resolution.exceptions import SQLGenerationError
+from bq_entity_resolution.matching.soft_signals import build_soft_signal_expr
 
 
 class _NS:

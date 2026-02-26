@@ -159,8 +159,8 @@ def test_blocking_with_lsh():
 def test_blocking_returns_sql_expression():
     """Builder returns SQLExpression."""
     params = BlockingParams(
-        target_table="t",
-        source_table="s",
+        target_table="p.d.target",
+        source_table="p.d.source",
         blocking_paths=[BlockingPath(index=0, keys=["k"])],
         tier_name="test",
     )

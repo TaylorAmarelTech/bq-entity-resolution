@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bq_entity_resolution.clients.bigquery import BigQueryClient, QueryResult
+from bq_entity_resolution.clients.bigquery import BigQueryClient
 from bq_entity_resolution.pipeline.runner import SQLRunner
 
 

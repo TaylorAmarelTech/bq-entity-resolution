@@ -7,6 +7,7 @@ Uses the features SQL builder for SQL generation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
@@ -22,6 +23,8 @@ from bq_entity_resolution.sql.builders.features import (
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 def _get_features_config(config):
@@ -86,6 +89,7 @@ class FeatureEngineeringStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate feature engineering SQL."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         config = self._config
         target = self.outputs["featured"].fq_name
         source_tables = [
@@ -106,12 +110,22 @@ class FeatureEngineeringStage(Stage):
             for feat in group.features:
                 func = FEATURE_FUNCTIONS.get(feat.function)
                 if func is None:
+                    logger.warning(
+                        "Unknown feature function '%s' for feature '%s' — skipping. "
+                        "Available: %s",
+                        feat.function, feat.name,
+                        sorted(FEATURE_FUNCTIONS.keys())[:10],
+                    )
                     continue
                 inputs = feat.inputs if isinstance(feat.inputs, list) else [feat.inputs]
                 params = feat.params or {}
                 try:
                     expression = func(inputs, **params)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping feature '%s' (function=%s): %s",
+                        feat.name, feat.function, exc,
+                    )
                     continue
                 all_features.append({
                     "name": feat.name,
@@ -132,7 +146,11 @@ class FeatureEngineeringStage(Stage):
                 if func is not None:
                     try:
                         expression = func([name_col])
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "Skipping compound feature '%s': %s",
+                            fn_name, exc,
+                        )
                         continue
                     all_features.append({
                         "name": feat_name,
@@ -160,7 +178,11 @@ class FeatureEngineeringStage(Stage):
             params = getattr(bk, "params", None) or {}
             try:
                 expression = func(inputs, **params)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Skipping blocking key '%s' (function=%s): %s",
+                    bk.name, bk.function, exc,
+                )
                 continue
             blocking_keys.append(FeatureExpr(bk.name, expression))
 
@@ -176,7 +198,10 @@ class FeatureEngineeringStage(Stage):
                 ck_inputs = ck.inputs if isinstance(ck.inputs, list) else [ck.inputs]
                 try:
                     ck_expr = func(ck_inputs)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping composite key '%s': %s", ck.name, exc,
+                    )
                     continue
             composite_keys.append(FeatureExpr(ck.name, ck_expr))
 
@@ -196,7 +221,11 @@ class FeatureEngineeringStage(Stage):
             ej_params = getattr(ej, "source_key_params", None) or {}
             try:
                 key_expr = ej_func(ej_inputs, **ej_params)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Skipping enrichment join '%s' (function=%s): %s",
+                    ej.name, ej.source_key_function, exc,
+                )
                 continue
             enrichment_joins.append(EnrichmentJoin(
                 table=ej.table,
@@ -286,6 +315,7 @@ class TermFrequencyStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate TF computation SQL, or empty if no TF-enabled comparisons."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         tf_columns: list[TFColumn] = []
 
         for tier in self._config.enabled_tiers():

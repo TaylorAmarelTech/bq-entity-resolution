@@ -93,11 +93,29 @@ class BQEmulatorBackend:
             except Exception as e:
                 logger.debug("Dataset creation skipped: %s", e)
 
+    def _check_open(self) -> None:
+        """Raise RuntimeError if the backend has been closed."""
+        if self._client is None:
+            raise RuntimeError("BQEmulatorBackend is closed. Cannot execute operations.")
+
+    def close(self) -> None:
+        """Close the underlying BigQuery client."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+    def __enter__(self) -> BQEmulatorBackend:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
     @property
     def dialect(self) -> str:
         return "bigquery"
 
     def execute(self, sql: str, label: str = "") -> QueryResult:
+        self._check_open()
         start = time.monotonic()
         try:
             job = self._client.query(sql)
@@ -115,6 +133,7 @@ class BQEmulatorBackend:
             raise
 
     def execute_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+        self._check_open()
         job = self._client.query(sql)
         result = job.result()
         return [dict(row) for row in result]
@@ -125,8 +144,8 @@ class BQEmulatorBackend:
         The emulator may not support full BQ scripting (DECLARE/WHILE/LOOP).
         We strip scripting constructs and execute the remaining SQL.
         """
+        self._check_open()
         # Strip BQ scripting constructs the emulator can't handle
-        import re
 
         lines = sql.split("\n")
         filtered = []
@@ -167,18 +186,23 @@ class BQEmulatorBackend:
             raise
 
     def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+        self._check_open()
         job = self._client.query(sql)
         result = job.result()
         return [dict(row) for row in result]
 
     def table_exists(self, table_ref: str) -> bool:
+        self._check_open()
+        from google.api_core.exceptions import NotFound
+
         try:
             self._client.get_table(table_ref)
             return True
-        except Exception:
+        except NotFound:
             return False
 
     def get_table_schema(self, table_ref: str) -> TableSchema:
+        self._check_open()
         table = self._client.get_table(table_ref)
         columns = []
         for field in table.schema:
@@ -187,6 +211,14 @@ class BQEmulatorBackend:
             columns.append(ColumnDef(name=field.name, type=mapped_type, nullable=nullable))
         return TableSchema(columns=tuple(columns))
 
+    def estimate_bytes(self, sql: str, label: str = "") -> int:
+        """Emulator does not support cost estimation; always returns 0."""
+        return 0
+
     def row_count(self, table_ref: str) -> int:
+        self._check_open()
+        from bq_entity_resolution.sql.utils import validate_table_ref
+
+        validate_table_ref(table_ref)
         rows = self.execute_and_fetch(f"SELECT COUNT(*) AS cnt FROM `{table_ref}`")
         return rows[0]["cnt"] if rows else 0

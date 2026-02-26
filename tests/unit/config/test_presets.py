@@ -3,10 +3,10 @@
 import pytest
 
 from bq_entity_resolution.config.presets import (
-    quick_config,
+    business_dedup_preset,
     person_dedup_preset,
     person_linkage_preset,
-    business_dedup_preset,
+    quick_config,
 )
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.exceptions import ConfigurationError

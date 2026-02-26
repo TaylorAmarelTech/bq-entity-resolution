@@ -12,29 +12,62 @@ Separates execution from planning. Handles:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable, Optional, Protocol
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
-from bq_entity_resolution.backends.protocol import Backend, QueryResult
+from bq_entity_resolution.backends.protocol import Backend
 from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
 
 logger = logging.getLogger(__name__)
 
 
-# BQ scripting markers — any of these indicate a script block
-_SCRIPT_MARKERS = frozenset({"DECLARE ", "BEGIN TRANSACTION", "BEGIN\n", "WHILE "})
+# Patterns for PII redaction in SQL audit logs.
+# Order matters: more specific patterns must come before generic ones
+# so that e.g. TIMESTAMP('...') is replaced before the generic string
+# literal pattern can consume the inner quotes.
+_PII_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Timestamps (must precede generic string literal pattern)
+    (re.compile(r"TIMESTAMP\('[^']*'\)"), "TIMESTAMP('<REDACTED>')"),
+    # SSN: 123-45-6789 (must precede phone to avoid partial overlap)
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "<SSN>"),
+    # Phone numbers: (555) 123-4567, 555-123-4567, 5551234567
+    (re.compile(r"\b\d{3}[-.)]\s*\d{3}[-.]?\d{4}\b"), "<PHONE>"),
+    # Email addresses
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<EMAIL>"),
+    # String literals: 'value' → '<REDACTED>' (generic catch-all, last)
+    (re.compile(r"'[^']*'"), "'<REDACTED>'"),
+]
+
+
+def _redact_sql(sql: str) -> str:
+    """Redact potential PII from SQL for audit logging.
+
+    Replaces string literals and timestamp values with <REDACTED>
+    to prevent PII from appearing in logs while keeping SQL structure
+    readable for debugging.
+    """
+    result = sql
+    for pattern, replacement in _PII_PATTERNS:
+        result = pattern.sub(replacement, result)
+    return result
 
 
 def _is_script_block(sql: str) -> bool:
     """Detect whether SQL is a BigQuery scripting block.
 
-    Checks for common scripting patterns: DECLARE, WHILE,
-    BEGIN TRANSACTION, etc.
+    Uses line-start anchoring to avoid false positives from keywords
+    appearing inside comments, string literals, or column names.
     """
-    upper = sql.lstrip().upper()
-    return any(marker in upper for marker in _SCRIPT_MARKERS)
+    upper = sql.upper()
+    return bool(
+        re.search(r'^\s*DECLARE\b', upper, re.MULTILINE)
+        or re.search(r'^\s*BEGIN\b', upper, re.MULTILINE)
+        or re.search(r'^\s*WHILE\b', upper, re.MULTILINE)
+        or re.search(r'^\s*SET\s+\w+\s*=', sql, re.IGNORECASE | re.MULTILINE)
+    )
 
 
 class ProgressCallback(Protocol):
@@ -55,7 +88,7 @@ class StageExecutionResult:
 
     stage_name: str
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
     sql_count: int = 0
     duration_seconds: float = 0.0
     rows_affected: int = 0
@@ -68,11 +101,11 @@ class PipelineResult:
 
     run_id: str
     started_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(UTC)
     )
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
     status: str = "running"
-    error: Optional[str] = None
+    error: str | None = None
     stage_results: list[StageExecutionResult] = field(default_factory=list)
     sql_log: list[dict] = field(default_factory=list)
 
@@ -94,6 +127,22 @@ class PipelineResult:
             if r.success and not r.skipped
         ]
 
+    @property
+    def total_sql_duration_seconds(self) -> float:
+        """Sum of per-query durations across all SQL log entries."""
+        return sum(
+            entry.get("duration_seconds", 0.0)
+            for entry in self.sql_log
+        )
+
+    @property
+    def total_bytes_billed(self) -> int:
+        """Sum of bytes billed across all SQL log entries."""
+        return sum(
+            entry.get("bytes_billed", 0)
+            for entry in self.sql_log
+        )
+
 
 class CheckpointManagerProtocol(Protocol):
     """Protocol for checkpoint persistence (avoids circular import)."""
@@ -101,8 +150,10 @@ class CheckpointManagerProtocol(Protocol):
     def ensure_table_exists(self) -> None: ...
     def load_completed_stages(self, run_id: str) -> set[str]: ...
     def find_resumable_run(self) -> str | None: ...
-    def mark_stage_complete(self, run_id: str, stage_name: str) -> None: ...
-    def mark_run_complete(self, run_id: str) -> None: ...
+    def mark_stage_complete(
+        self, run_id: str, stage_name: str, **kwargs: Any
+    ) -> None: ...
+    def mark_run_complete(self, run_id: str, **kwargs: Any) -> None: ...
 
 
 class PipelineExecutor:
@@ -112,13 +163,17 @@ class PipelineExecutor:
     and the executor runs it in order with error handling,
     quality gates, checkpoint persistence, and metrics collection.
 
+    Production features:
+    - Pipeline-level cost ceiling (abort if cumulative bytes exceed limit)
+    - Health probe updates on each stage completion
+    - Retry strategy delegated to backend (BigQueryClient handles retries)
+
     Retry strategy: The executor does NOT implement its own retry logic
     for transient errors (503 ServiceUnavailable, 429 TooManyRequests,
     500 InternalServerError). Retries are the responsibility of the
     backend implementation. The BigQueryClient in clients/bigquery.py
-    provides exponential-backoff retries (3 attempts, 5s/10s/20s delay)
-    for these transient errors. DuckDB operations are local and do not
-    need network retries.
+    provides exponential-backoff retries with jitter. DuckDB operations
+    are local and do not need network retries.
     """
 
     def __init__(
@@ -127,11 +182,23 @@ class PipelineExecutor:
         quality_gates: list[Any] | None = None,
         checkpoint_manager: CheckpointManagerProtocol | None = None,
         on_progress: ProgressCallback | None = None,
+        max_cost_bytes: int | None = None,
+        health_probe: Any | None = None,
+        fencing_kwargs: dict[str, Any] | None = None,
+        redact_sql_logs: bool = True,
     ):
         self.backend = backend
         self.quality_gates = quality_gates or []
         self._checkpoint = checkpoint_manager
         self._on_progress = on_progress
+        self._max_cost_bytes = max_cost_bytes
+        self._health_probe = health_probe
+        self._fencing_kwargs = fencing_kwargs or {}
+        # PII redaction is always enabled for SQL audit log entries.
+        # The parameter is kept for backward-compatible signatures but
+        # has no effect: _redact_sql() is applied unconditionally.
+        self._redact_sql_logs = redact_sql_logs
+        self._checkpoint_failures = 0
 
     def execute(
         self,
@@ -200,33 +267,66 @@ class PipelineExecutor:
                 result.stage_results.append(stage_result)
 
                 if not stage_result.success:
-                    self._notify_progress(
-                        stage_plan.stage_name, idx, total_stages, "failed"
+                    fail_detail = (
+                        f"failed after {stage_result.duration_seconds:.1f}s"
+                        f": {stage_result.error}"
                     )
+                    self._notify_progress(
+                        stage_plan.stage_name, idx, total_stages, fail_detail
+                    )
+                    original = getattr(stage_result, "_original_exception", None)
                     raise RuntimeError(
                         f"Stage '{stage_plan.stage_name}' failed: "
                         f"{stage_result.error}"
-                    )
+                    ) from original
+
+                # Check pipeline-level cost ceiling
+                if self._max_cost_bytes and hasattr(self.backend, "check_cost_ceiling"):
+                    self.backend.check_cost_ceiling(self._max_cost_bytes)
 
                 # Run quality gates BEFORE checkpoint (so failed gates
                 # are not persisted as completed on resume)
                 self._check_gates(stage_plan, result)
 
+                # Update health probe after stage success
+                if self._health_probe:
+                    try:
+                        self._health_probe.mark_healthy(
+                            stage=stage_plan.stage_name,
+                            run_id=run_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Health probe update failed for stage '%s'",
+                            stage_plan.stage_name, exc_info=True,
+                        )
+
                 # Persist checkpoint after successful stage + gates
                 if self._checkpoint:
                     try:
                         self._checkpoint.mark_stage_complete(
-                            run_id, stage_plan.stage_name
+                            run_id, stage_plan.stage_name,
+                            **self._fencing_kwargs,
                         )
+                        self._checkpoint_failures = 0  # Reset on success
                     except Exception:
+                        self._checkpoint_failures += 1
                         logger.error(
-                            "Failed to persist checkpoint for stage '%s' in run '%s'. "
+                            "Failed to persist checkpoint for stage '%s' in run '%s' "
+                            "(consecutive failures: %d). "
                             "Stage completed successfully but checkpoint was NOT saved — "
                             "this stage may re-execute on resume.",
                             stage_plan.stage_name,
                             run_id,
+                            self._checkpoint_failures,
                             exc_info=True,
                         )
+                        if self._checkpoint_failures >= 3:
+                            raise RuntimeError(
+                                f"Aborting: {self._checkpoint_failures} consecutive "
+                                f"checkpoint write failures. The checkpoint backend "
+                                f"may be unavailable."
+                            )
 
                 self._notify_progress(
                     stage_plan.stage_name, idx, total_stages, "completed"
@@ -237,7 +337,9 @@ class PipelineExecutor:
             # Mark entire run as complete in checkpoint
             if self._checkpoint:
                 try:
-                    self._checkpoint.mark_run_complete(run_id)
+                    self._checkpoint.mark_run_complete(
+                        run_id, **self._fencing_kwargs
+                    )
                 except Exception:
                     logger.error(
                         "Failed to mark run '%s' as complete in checkpoint. "
@@ -247,9 +349,13 @@ class PipelineExecutor:
                     )
 
             logger.info(
-                "Pipeline completed: %s (%.1fs)",
+                "Pipeline completed: %s (%.1fs, %d queries, "
+                "sql_time=%.1fs, bytes_billed=%d)",
                 run_id,
                 result.duration_seconds,
+                len(result.sql_log),
+                result.total_sql_duration_seconds,
+                result.total_bytes_billed,
             )
 
         except Exception as e:
@@ -259,7 +365,7 @@ class PipelineExecutor:
             raise
 
         finally:
-            result.finished_at = datetime.now(timezone.utc)
+            result.finished_at = datetime.now(UTC)
 
         return result
 
@@ -291,11 +397,17 @@ class PipelineExecutor:
             for expr in stage_plan.sql_expressions:
                 sql = expr.render()
 
-                pipeline_result.sql_log.append({
+                # Always redact PII in SQL audit log entries to prevent
+                # sensitive data from leaking into persisted logs.
+                logged_sql = _redact_sql(sql)
+                log_entry: dict[str, Any] = {
                     "stage": stage_plan.stage_name,
-                    "sql": sql,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                    "sql": logged_sql,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+
+                # Track per-query execution time
+                query_start = time.monotonic()
 
                 # Use execute_script for BQ scripting blocks
                 if _is_script_block(sql):
@@ -307,13 +419,36 @@ class PipelineExecutor:
                         sql, label=stage_plan.stage_name
                     )
 
+                query_duration = time.monotonic() - query_start
+                log_entry["duration_seconds"] = round(query_duration, 4)
+                log_entry["bytes_billed"] = query_result.bytes_billed
+
+                pipeline_result.sql_log.append(log_entry)
+
                 stage_result.rows_affected += query_result.rows_affected
+
+                # Per-SQL health probe heartbeat so K8s doesn't
+                # think a long-running stage is hung
+                if self._health_probe:
+                    try:
+                        self._health_probe.mark_healthy(
+                            stage=stage_plan.stage_name,
+                            run_id=getattr(pipeline_result, "run_id", ""),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Health probe update failed for stage '%s'",
+                            stage_plan.stage_name, exc_info=True,
+                        )
 
         except Exception as e:
             stage_result.success = False
-            stage_result.error = str(e)
+            stage_result.error = _redact_sql(str(e))
+            stage_result._original_exception = e  # Preserve for chaining
             logger.error(
-                "Stage '%s' failed: %s", stage_plan.stage_name, e
+                "Stage '%s' failed: %s",
+                stage_plan.stage_name,
+                stage_result.error,
             )
 
         finally:
@@ -360,9 +495,12 @@ class PipelineExecutor:
             try:
                 self._on_progress(stage_name, stage_index, total_stages, status)
             except Exception:
-                pass  # Never let progress callback crash the pipeline
+                logger.warning(
+                    "Progress callback failed for stage '%s'",
+                    stage_name, exc_info=True,
+                )
 
     @staticmethod
     def _generate_run_id() -> str:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         return f"er_run_{ts}"

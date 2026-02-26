@@ -1,11 +1,11 @@
 """Backend abstractions for SQL execution."""
 
-from bq_entity_resolution.backends.protocol import Backend, QueryResult, TableSchema, ColumnDef
+from bq_entity_resolution.backends.protocol import Backend, ColumnDef, QueryResult, TableSchema
 
 __all__ = ["Backend", "QueryResult", "TableSchema", "ColumnDef"]
 
 
-def get_backend(name: str, **kwargs):
+def get_backend(name: str, **kwargs) -> Backend:
     """Factory for creating backend instances.
 
     Args:

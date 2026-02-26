@@ -31,7 +31,7 @@ VOLUME ["/app/config/user"]
 VOLUME ["/app/secrets"]
 
 HEALTHCHECK --interval=30s --timeout=5s \
-    CMD python -c "import bq_entity_resolution; print('ok')"
+    CMD test -f /tmp/pipeline_healthy
 
 USER pipeline
 

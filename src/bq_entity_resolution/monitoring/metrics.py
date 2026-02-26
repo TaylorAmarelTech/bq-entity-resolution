@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+
+from bq_entity_resolution.sql.utils import sql_escape
 
 if TYPE_CHECKING:
     from bq_entity_resolution.backends.protocol import Backend
@@ -91,7 +93,7 @@ class MetricsCollector:
             return
 
         table = self._metrics_table()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Separate fixed columns from per-stage dynamic columns
         stage_data: dict[str, Any] = {}
@@ -104,7 +106,7 @@ class MetricsCollector:
 
         # Ensure the table exists
         create_ddl = (
-            f"CREATE TABLE IF NOT EXISTS {table} (\n"
+            f"CREATE TABLE IF NOT EXISTS `{table}` (\n"
             f"  run_id STRING,\n"
             f"  recorded_at TIMESTAMP,\n"
             f"  status STRING,\n"
@@ -117,21 +119,28 @@ class MetricsCollector:
             f")"
         )
 
+        # Sanitize string values to prevent SQL injection
+        run_id_safe = sql_escape(str(fixed.get("run_id", "")))
+        status_safe = sql_escape(str(fixed.get("status", "")))
+        error_val = fixed.get("error")
+        error_safe = "NULL" if not error_val else f"'{sql_escape(str(error_val))}'"
+        stage_json_safe = sql_escape(json.dumps(stage_data))
+
         insert_sql = (
-            f"INSERT INTO {table} "
+            f"INSERT INTO `{table}` "
             f"(run_id, recorded_at, status, duration_seconds, "
             f"stages_completed, stages_total, total_sql_statements, "
             f"error, stage_details) "
             f"VALUES ("
-            f"'{fixed.get('run_id', '')}', "
+            f"'{run_id_safe}', "
             f"TIMESTAMP '{now}', "
-            f"'{fixed.get('status', '')}', "
+            f"'{status_safe}', "
             f"{fixed.get('duration_seconds', 0)}, "
             f"{fixed.get('stages_completed', 0)}, "
             f"{fixed.get('stages_total', 0)}, "
             f"{fixed.get('total_sql_statements', 0)}, "
-            f"{'NULL' if not fixed.get('error') else repr(str(fixed['error']))}, "
-            f"'{json.dumps(stage_data)}'"
+            f"{error_safe}, "
+            f"'{stage_json_safe}'"
             f")"
         )
 

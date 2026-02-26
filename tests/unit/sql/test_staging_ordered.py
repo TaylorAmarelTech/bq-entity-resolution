@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from bq_entity_resolution.sql.builders.staging import (
     StagingParams,
-    _build_ordered_watermark,
     _build_order_by_columns,
+    _build_ordered_watermark,
     build_staging_sql,
 )
 
@@ -169,9 +169,9 @@ class TestBuildOrderByColumns:
     def test_ordered_mode_includes_all_watermark_columns(self):
         """Ordered mode ORDER BY includes all watermark columns."""
         params = StagingParams(
-            target_table="t",
+            target_table="p.d.target",
             source_name="s",
-            source_table="st",
+            source_table="p.d.source",
             unique_key="id",
             updated_at="updated_at",
             watermark={
@@ -189,9 +189,9 @@ class TestBuildOrderByColumns:
     def test_independent_mode_uses_updated_at(self):
         """Independent mode ORDER BY uses updated_at only."""
         params = StagingParams(
-            target_table="t",
+            target_table="p.d.target",
             source_name="s",
-            source_table="st",
+            source_table="p.d.source",
             unique_key="id",
             updated_at="updated_at",
             watermark={
@@ -210,9 +210,9 @@ class TestBuildOrderByColumns:
     def test_entity_uid_always_last(self):
         """entity_uid is always included as final tiebreaker."""
         params = StagingParams(
-            target_table="t",
+            target_table="p.d.target",
             source_name="s",
-            source_table="st",
+            source_table="p.d.source",
             unique_key="id",
             updated_at="updated_at",
             cursor_mode="ordered",
@@ -223,9 +223,9 @@ class TestBuildOrderByColumns:
     def test_no_watermark_uses_updated_at(self):
         """Without watermark, ORDER BY uses updated_at."""
         params = StagingParams(
-            target_table="t",
+            target_table="p.d.target",
             source_name="s",
-            source_table="st",
+            source_table="p.d.source",
             unique_key="id",
             updated_at="updated_at",
         )

@@ -117,8 +117,8 @@ class TestBuildCanonicalIndexInitSql:
     def test_returns_sql_expression(self):
         """Builder returns an SQLExpression with is_raw True."""
         params = CanonicalIndexInitParams(
-            canonical_table="t",
-            source_table="s",
+            canonical_table="p.d.target",
+            source_table="p.d.source",
         )
         expr = build_canonical_index_init_sql(params)
         assert expr.is_raw is True

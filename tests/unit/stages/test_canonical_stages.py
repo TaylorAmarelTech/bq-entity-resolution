@@ -11,7 +11,6 @@ from bq_entity_resolution.stages.reconciliation import (
     CanonicalIndexPopulateStage,
 )
 
-
 # -- Minimal config fixture --
 
 def _make_config():
@@ -134,7 +133,7 @@ class TestCanonicalIndexPopulateStage:
         stage = CanonicalIndexPopulateStage(config)
         assert stage.outputs == {}
 
-    def test_plan_returns_update_and_insert(self):
+    def test_plan_returns_atomic_merge(self):
         config = _make_config()
         stage = CanonicalIndexPopulateStage(config)
         exprs = stage.plan()
@@ -142,8 +141,10 @@ class TestCanonicalIndexPopulateStage:
         assert len(exprs) == 1
         sql = exprs[0].render()
 
-        assert "UPDATE" in sql
-        assert "INSERT INTO" in sql
+        assert "MERGE INTO" in sql
+        assert "WHEN MATCHED AND" in sql
+        assert "WHEN NOT MATCHED THEN" in sql
+        assert "INSERT ROW" in sql
 
     def test_plan_sql_references_canonical_index(self):
         config = _make_config()
@@ -171,12 +172,12 @@ class TestCanonicalIndexPopulateStage:
         stage = CanonicalIndexPopulateStage(config)
         sql = stage.plan()[0].render()
 
-        assert "SET cluster_id" in sql
+        assert "UPDATE SET cluster_id" in sql
 
-    def test_plan_sql_insert_uses_not_in(self):
-        """Insert only new entities not already in canonical_index."""
+    def test_plan_sql_merge_uses_entity_uid_key(self):
+        """MERGE joins on entity_uid to detect existing vs new entities."""
         config = _make_config()
         stage = CanonicalIndexPopulateStage(config)
         sql = stage.plan()[0].render()
 
-        assert "NOT IN" in sql
+        assert "ON ci.entity_uid = src.entity_uid" in sql

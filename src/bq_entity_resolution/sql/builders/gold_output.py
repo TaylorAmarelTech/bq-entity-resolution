@@ -12,23 +12,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bq_entity_resolution.columns import (
-    ENTITY_UID,
+    CANONICAL_ENTITY_UID,
+    CANONICAL_SCORE,
     CLUSTER_ID,
-    SOURCE_NAME,
-    SOURCE_UPDATED_AT,
-    PIPELINE_LOADED_AT,
+    ENTITY_UID,
+    IS_CANONICAL,
     LEFT_ENTITY_UID,
-    RIGHT_ENTITY_UID,
-    MATCH_TOTAL_SCORE,
+    MATCH_CONFIDENCE,
     MATCH_TIER_NAME,
     MATCH_TIER_PRIORITY,
-    MATCH_CONFIDENCE,
+    MATCH_TOTAL_SCORE,
     MATCHED_AT,
-    RESOLVED_ENTITY_ID,
-    CANONICAL_ENTITY_UID,
-    IS_CANONICAL,
-    CANONICAL_SCORE,
     MATCHED_BY_TIER,
+    PIPELINE_LOADED_AT,
+    RESOLVED_ENTITY_ID,
+    RIGHT_ENTITY_UID,
+    SOURCE_NAME,
+    SOURCE_UPDATED_AT,
 )
 from bq_entity_resolution.sql.builders.golden_record import (
     FieldStrategy,
@@ -36,6 +36,7 @@ from bq_entity_resolution.sql.builders.golden_record import (
     build_golden_record_cte,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import sql_escape, validate_identifier, validate_table_ref
 
 
 @dataclass(frozen=True)
@@ -45,12 +46,13 @@ class GoldOutputParams:
     source_table: str
     cluster_table: str
     matches_table: str
-    canonical_method: str = "completeness"  # 'completeness', 'recency', 'source_priority', 'field_merge'
+    # 'completeness', 'recency', 'source_priority', 'field_merge'
+    canonical_method: str = "completeness"
     scoring_columns: list[str] = field(default_factory=list)
     source_columns: list[str] = field(default_factory=list)
     passthrough_columns: list[str] = field(default_factory=list)
     include_match_metadata: bool = True
-    entity_id_prefix: str = "ent"
+    entity_id_prefix: str = "ENT"
     partition_column: str | None = None
     cluster_columns: list[str] = field(default_factory=list)
     source_priority: list[str] = field(default_factory=list)
@@ -59,6 +61,22 @@ class GoldOutputParams:
     default_field_strategy: str = "most_complete"
     # Reconciliation strategy for match deduplication
     reconciliation_strategy: str = "tier_priority"
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.target_table)
+        validate_table_ref(self.source_table)
+        validate_table_ref(self.cluster_table)
+        validate_table_ref(self.matches_table)
+        for col in self.scoring_columns:
+            validate_identifier(col, "gold output scoring column")
+        for col in self.source_columns:
+            validate_identifier(col, "gold output source column")
+        for col in self.passthrough_columns:
+            validate_identifier(col, "gold output passthrough column")
+        for col in self.cluster_columns:
+            validate_identifier(col, "gold output cluster column")
+        if self.partition_column:
+            validate_identifier(self.partition_column, "gold output partition column")
 
 
 def _match_metadata_order_by(strategy: str) -> str:
@@ -133,7 +151,7 @@ def _build_standard_sql(params: GoldOutputParams) -> SQLExpression:
     elif params.canonical_method == "source_priority":
         cases: list[str] = []
         for i, src in enumerate(params.source_priority):
-            cases.append(f"WHEN '{src}' THEN {1000 - i}")
+            cases.append(f"WHEN '{sql_escape(src)}' THEN {1000 - i}")
         case_expr = " ".join(cases)
         parts.append(
             f"    CASE {SOURCE_NAME} {case_expr} ELSE 0 END AS {CANONICAL_SCORE},"
@@ -167,10 +185,7 @@ def _build_standard_sql(params: GoldOutputParams) -> SQLExpression:
     # CTE: resolved
     parts.append("resolved AS (")
     parts.append("  SELECT")
-    parts.append(
-        f"    '{params.entity_id_prefix}_' || "
-        f"CAST(cl.{CLUSTER_ID} AS STRING) AS {RESOLVED_ENTITY_ID},"
-    )
+    parts.append(f"    cl.{CLUSTER_ID} AS {RESOLVED_ENTITY_ID},")
     parts.append(f"    cl.{CLUSTER_ID},")
     parts.append(f"    can.{CANONICAL_ENTITY_UID},")
     parts.append(
@@ -244,10 +259,7 @@ def _build_field_merge_sql(params: GoldOutputParams) -> SQLExpression:
     # CTE: resolved — use golden_fields for column values
     parts.append("resolved AS (")
     parts.append("  SELECT")
-    parts.append(
-        f"    '{params.entity_id_prefix}_' || "
-        f"CAST(g.{CLUSTER_ID} AS STRING) AS {RESOLVED_ENTITY_ID},"
-    )
+    parts.append(f"    g.{CLUSTER_ID} AS {RESOLVED_ENTITY_ID},")
     parts.append(f"    g.{CLUSTER_ID},")
     parts.append(f"    g.{ENTITY_UID} AS {CANONICAL_ENTITY_UID},")
     parts.append(f"    TRUE AS {IS_CANONICAL},")

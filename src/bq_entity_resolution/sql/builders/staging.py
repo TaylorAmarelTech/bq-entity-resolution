@@ -31,9 +31,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from bq_entity_resolution.columns import ENTITY_UID, SOURCE_NAME, SOURCE_UPDATED_AT, PIPELINE_LOADED_AT
+from bq_entity_resolution.columns import (
+    ENTITY_UID,
+    PIPELINE_LOADED_AT,
+    SOURCE_NAME,
+    SOURCE_UPDATED_AT,
+)
 from bq_entity_resolution.sql.expression import SQLExpression
-from bq_entity_resolution.sql.utils import sql_escape
+from bq_entity_resolution.sql.utils import (
+    format_watermark_value,
+    sql_escape,
+    validate_identifier,
+    validate_table_ref,
+)
+
+_VALID_JOIN_TYPES = frozenset({"LEFT", "INNER", "CROSS", "RIGHT"})
 
 
 @dataclass(frozen=True)
@@ -43,6 +55,16 @@ class JoinDef:
     on: str
     type: str = "LEFT"
     alias: str = ""
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.table)
+        if self.alias:
+            validate_identifier(self.alias, "join alias")
+        if self.type not in _VALID_JOIN_TYPES:
+            raise ValueError(
+                f"Invalid join type: {self.type!r}. "
+                f"Must be one of {sorted(_VALID_JOIN_TYPES)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -56,6 +78,9 @@ class PartitionCursor:
     column: str
     value: Any
     strategy: str = "range"  # "range", "equality", "in_list"
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.column, "partition cursor column")
 
 
 @dataclass(frozen=True)
@@ -72,6 +97,10 @@ class HashCursor:
     column: str
     modulus: int = 1000
     alias: str = "_hash_partition"
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.column, "hash cursor column")
+        validate_identifier(self.alias, "hash cursor alias")
 
 
 @dataclass(frozen=True)
@@ -96,25 +125,22 @@ class StagingParams:
     partition_cursors: list[PartitionCursor] = field(default_factory=list)
     cursor_mode: str = "ordered"  # "ordered" or "independent"
     hash_cursor: HashCursor | None = None
+    table_expiration_days: int | None = None
 
-
-def _format_watermark_value(val: Any) -> str:
-    """Format a watermark value for SQL embedding."""
-    if val is None:
-        return "NULL"
-    s = str(val)
-    # Timestamps
-    if "T" in s or ("-" in s and ":" in s):
-        safe = s.replace("'", "''")
-        return f"TIMESTAMP('{safe}')"
-    # Numeric
-    try:
-        float(s)
-        return s
-    except (ValueError, TypeError):
-        pass
-    safe = s.replace("'", "''")
-    return f"'{safe}'"
+    def __post_init__(self) -> None:
+        validate_table_ref(self.target_table)
+        validate_table_ref(self.source_table)
+        validate_identifier(self.unique_key, "staging unique key")
+        if self.updated_at:
+            validate_identifier(self.updated_at, "staging updated_at")
+        for col in self.columns:
+            validate_identifier(col, "staging column")
+        for col in self.passthrough_columns:
+            validate_identifier(col, "staging passthrough column")
+        for col in self.cluster_by:
+            validate_identifier(col, "staging cluster_by column")
+        if self.partition_column:
+            validate_identifier(self.partition_column, "staging partition column")
 
 
 def _build_ordered_watermark(
@@ -138,10 +164,10 @@ def _build_ordered_watermark(
     for depth in range(len(cols)):
         eq_parts: list[str] = []
         for i in range(depth):
-            fv = _format_watermark_value(vals[i])
+            fv = format_watermark_value(vals[i])
             eq_parts.append(f"{cols[i]} = {fv}")
 
-        fv = _format_watermark_value(vals[depth])
+        fv = format_watermark_value(vals[depth])
         if depth == 0 and grace_period_hours and grace_period_hours > 0:
             gt_part = (
                 f"{cols[depth]} > TIMESTAMP_SUB({fv}, "
@@ -200,6 +226,12 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
         parts.append(f"PARTITION BY {params.partition_by}")
     if params.cluster_by:
         parts.append(f"CLUSTER BY {', '.join(params.cluster_by)}")
+    if params.table_expiration_days:
+        parts.append(
+            f"OPTIONS(expiration_timestamp="
+            f"TIMESTAMP_ADD(CURRENT_TIMESTAMP(), "
+            f"INTERVAL {params.table_expiration_days} DAY))"
+        )
     parts.append("AS")
     parts.append("")
     parts.append("SELECT")
@@ -212,15 +244,15 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
     # ensure uniqueness across sources (same unique_key in different sources
     # produces different entity_uids).
     escaped_name = sql_escape(params.source_name)
-    parts.append(f"  FARM_FINGERPRINT(")
-    parts.append(f"    CONCAT(")
+    parts.append("  FARM_FINGERPRINT(")
+    parts.append("    CONCAT(")
     parts.append(f"      '{escaped_name}', '||',")
     parts.append(f"      CAST({params.unique_key} AS STRING)")
-    parts.append(f"    )")
+    parts.append("    )")
     parts.append(f"  ) AS {ENTITY_UID},")
-    parts.append(f"")
+    parts.append("")
     parts.append(f"  '{escaped_name}' AS {SOURCE_NAME},")
-    parts.append(f"")
+    parts.append("")
 
     # Source columns
     for col in params.columns:
@@ -241,7 +273,7 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
     # Metadata columns
     parts.append(f"  {params.updated_at} AS {SOURCE_UPDATED_AT},")
     parts.append(f"  CURRENT_TIMESTAMP() AS {PIPELINE_LOADED_AT}")
-    parts.append(f"")
+    parts.append("")
     parts.append(f"FROM `{params.source_table}` AS src")
 
     # Supplemental joins
@@ -250,7 +282,7 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
         parts.append(f"{join.type} JOIN `{join.table}` AS {alias}")
         parts.append(f"  ON {join.on}")
 
-    parts.append(f"WHERE 1=1")
+    parts.append("WHERE 1=1")
 
     # Source-level filter
     if params.filter:
@@ -260,16 +292,19 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
     if params.watermark and not params.full_refresh:
         if params.cursor_mode == "ordered" and len(params.watermark) > 1:
             # Ordered tuple comparison: (col1, col2) > (wm1, wm2)
-            # Expands to: col1 > wm1 OR (col1 = wm1 AND col2 > wm2)
-            # For 3+ columns: col1 > wm1 OR (col1 = wm1 AND (col2 > wm2 OR (col2 = wm2 AND col3 > wm3)))
+            # col1 > wm1 OR (col1 = wm1 AND col2 > wm2)
+            # 3+ cols: c1>w1 OR (c1=w1 AND (c2>w2 OR ...))
             parts.append("AND (")
-            parts.append(f"  {_build_ordered_watermark(params.watermark, params.grace_period_hours)}")
+            wm_clause = _build_ordered_watermark(
+                params.watermark, params.grace_period_hours,
+            )
+            parts.append(f"  {wm_clause}")
             parts.append(")")
         else:
             # Independent (OR) mode — original behavior
             conditions: list[str] = []
             for col, val in params.watermark.items():
-                formatted_val = _format_watermark_value(val)
+                formatted_val = format_watermark_value(val)
                 if params.grace_period_hours and params.grace_period_hours > 0:
                     conditions.append(
                         f"{col} > TIMESTAMP_SUB({formatted_val}, "
@@ -277,20 +312,20 @@ def build_staging_sql(params: StagingParams) -> SQLExpression:
                     )
                 else:
                     conditions.append(f"{col} > {formatted_val}")
-            parts.append(f"AND (")
+            parts.append("AND (")
             parts.append(f"  {' OR '.join(conditions)}")
-            parts.append(f")")
+            parts.append(")")
 
     # Partition cursor filters (AND with time watermark for partition pruning)
     if params.partition_cursors and not params.full_refresh:
         for pc in params.partition_cursors:
-            formatted_val = _format_watermark_value(pc.value)
+            formatted_val = format_watermark_value(pc.value)
             if pc.strategy == "range":
                 parts.append(f"AND {pc.column} >= {formatted_val}")
             elif pc.strategy == "equality":
                 parts.append(f"AND {pc.column} = {formatted_val}")
             elif pc.strategy == "in_list" and isinstance(pc.value, (list, tuple)):
-                vals = ", ".join(_format_watermark_value(v) for v in pc.value)
+                vals = ", ".join(format_watermark_value(v) for v in pc.value)
                 parts.append(f"AND {pc.column} IN ({vals})")
 
     # Exclude incomplete current day

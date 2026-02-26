@@ -40,20 +40,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bq_entity_resolution.columns import (
-    ENTITY_UID,
-    LEFT_ENTITY_UID,
-    RIGHT_ENTITY_UID,
-    BLOCKING_PATH,
-    SOURCE_NAME,
-    BLOCKING_METRIC_TIER_NAME,
-    BLOCKING_METRIC_TOTAL_RECORDS,
     BLOCKING_METRIC_CANDIDATE_PAIRS,
+    BLOCKING_METRIC_COMPUTED_AT,
     BLOCKING_METRIC_MATCHED_PAIRS,
     BLOCKING_METRIC_PRECISION,
     BLOCKING_METRIC_REDUCTION_RATIO,
-    BLOCKING_METRIC_COMPUTED_AT,
+    BLOCKING_METRIC_TIER_NAME,
+    BLOCKING_METRIC_TOTAL_RECORDS,
+    BLOCKING_PATH,
+    ENTITY_UID,
+    LEFT_ENTITY_UID,
+    RIGHT_ENTITY_UID,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import sql_escape, validate_identifier, validate_table_ref
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,13 @@ class BlockingPath:
     keys: list[str] = field(default_factory=list)
     lsh_keys: list[str] = field(default_factory=list)
     candidate_limit: int = 0
+    bucket_size_limit: int = 0  # max entities per bucket (0 = no limit)
+
+    def __post_init__(self) -> None:
+        for key in self.keys:
+            validate_identifier(key, "blocking key")
+        for key in self.lsh_keys:
+            validate_identifier(key, "LSH blocking key")
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,16 @@ class BlockingParams:
     link_type: str | None = None  # 'link_and_dedupe', 'dedupe_only', 'link_only'
     cluster_by: list[str] = field(default_factory=list)
     partition_by: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.target_table)
+        validate_table_ref(self.source_table)
+        if self.canonical_table is not None:
+            validate_table_ref(self.canonical_table)
+        if self.excluded_pairs_table is not None:
+            validate_table_ref(self.excluded_pairs_table)
+        if self.lsh_table is not None:
+            validate_table_ref(self.lsh_table)
 
 
 def _build_join_conditions(
@@ -147,7 +164,7 @@ def _build_path_cte(
 
     lines = [
         f"{cte_name} AS (",
-        f"  SELECT",
+        "  SELECT",
         f"    l.{ENTITY_UID} AS {LEFT_ENTITY_UID},",
         f"    r.{ENTITY_UID} AS {RIGHT_ENTITY_UID},",
         f"    '{path_label}' AS {BLOCKING_PATH}",
@@ -156,13 +173,23 @@ def _build_path_cte(
         f"    ON {on_clause}",
     ]
 
+    # Bucket size limit: filter out oversized buckets to prevent cartesian explosion
+    if path.bucket_size_limit > 0:
+        # Build the partition key from all blocking keys
+        bucket_keys = list(path.keys) + list(path.lsh_keys)
+        if bucket_keys:
+            partition_cols = ", ".join(f"l.{k}" for k in bucket_keys)
+            lines.append(f"  QUALIFY COUNT(*) OVER (PARTITION BY {partition_cols})")
+            lines.append(f"    <= {path.bucket_size_limit}")
+
     if path.candidate_limit > 0:
-        lines.append(f"  QUALIFY ROW_NUMBER() OVER (")
-        lines.append(f"    PARTITION BY l.entity_uid")
-        lines.append(f"    ORDER BY r.entity_uid")
+        qualify_keyword = "  AND" if path.bucket_size_limit > 0 else "  QUALIFY"
+        lines.append(f"{qualify_keyword} ROW_NUMBER() OVER (")
+        lines.append("    PARTITION BY l.entity_uid")
+        lines.append("    ORDER BY r.entity_uid")
         lines.append(f"  ) <= {path.candidate_limit}")
 
-    lines.append(f")")
+    lines.append(")")
 
     return "\n".join(lines)
 
@@ -276,10 +303,12 @@ def build_blocking_sql(params: BlockingParams) -> SQLExpression:
     if params.excluded_pairs_table:
         parts.append(f"LEFT JOIN `{params.excluded_pairs_table}` e")
         parts.append(
-            f"  ON (d.{LEFT_ENTITY_UID} = e.{LEFT_ENTITY_UID} AND d.{RIGHT_ENTITY_UID} = e.{RIGHT_ENTITY_UID})"
+            f"  ON (d.{LEFT_ENTITY_UID} = e.{LEFT_ENTITY_UID}"
+            f" AND d.{RIGHT_ENTITY_UID} = e.{RIGHT_ENTITY_UID})"
         )
         parts.append(
-            f"  OR (d.{LEFT_ENTITY_UID} = e.{RIGHT_ENTITY_UID} AND d.{RIGHT_ENTITY_UID} = e.{LEFT_ENTITY_UID})"
+            f"  OR (d.{LEFT_ENTITY_UID} = e.{RIGHT_ENTITY_UID}"
+            f" AND d.{RIGHT_ENTITY_UID} = e.{LEFT_ENTITY_UID})"
         )
         parts.append(f"WHERE e.{LEFT_ENTITY_UID} IS NULL")
 
@@ -299,6 +328,11 @@ class BlockingMetricsParams:
     source_table: str
     tier_name: str
 
+    def __post_init__(self) -> None:
+        validate_table_ref(self.candidates_table)
+        validate_table_ref(self.matches_table)
+        validate_table_ref(self.source_table)
+
 
 def build_blocking_metrics_sql(params: BlockingMetricsParams) -> SQLExpression:
     """Build SQL to compute blocking evaluation metrics.
@@ -306,20 +340,27 @@ def build_blocking_metrics_sql(params: BlockingMetricsParams) -> SQLExpression:
     Measures how well blocking reduces the comparison space
     while retaining true matches.
     """
+    src = params.source_table
+    cand = params.candidates_table
+    match = params.matches_table
+    escaped_tier = sql_escape(params.tier_name)
     sql = (
         f"SELECT\n"
-        f"  '{params.tier_name}' AS {BLOCKING_METRIC_TIER_NAME},\n"
-        f"  (SELECT COUNT(*) FROM `{params.source_table}`) AS {BLOCKING_METRIC_TOTAL_RECORDS},\n"
-        f"  (SELECT COUNT(*) FROM `{params.candidates_table}`) AS {BLOCKING_METRIC_CANDIDATE_PAIRS},\n"
-        f"  (SELECT COUNT(*) FROM `{params.matches_table}`) AS {BLOCKING_METRIC_MATCHED_PAIRS},\n"
+        f"  '{escaped_tier}' AS {BLOCKING_METRIC_TIER_NAME},\n"
+        f"  (SELECT COUNT(*) FROM `{src}`)"
+        f" AS {BLOCKING_METRIC_TOTAL_RECORDS},\n"
+        f"  (SELECT COUNT(*) FROM `{cand}`)"
+        f" AS {BLOCKING_METRIC_CANDIDATE_PAIRS},\n"
+        f"  (SELECT COUNT(*) FROM `{match}`)"
+        f" AS {BLOCKING_METRIC_MATCHED_PAIRS},\n"
         f"  SAFE_DIVIDE(\n"
-        f"    (SELECT COUNT(*) FROM `{params.matches_table}`),\n"
-        f"    (SELECT COUNT(*) FROM `{params.candidates_table}`)\n"
+        f"    (SELECT COUNT(*) FROM `{match}`),\n"
+        f"    (SELECT COUNT(*) FROM `{cand}`)\n"
         f"  ) AS {BLOCKING_METRIC_PRECISION},\n"
         f"  SAFE_DIVIDE(\n"
-        f"    (SELECT COUNT(*) FROM `{params.candidates_table}`),\n"
-        f"    (SELECT COUNT(*) FROM `{params.source_table}`) "
-        f"* ((SELECT COUNT(*) FROM `{params.source_table}`) - 1) / 2.0\n"
+        f"    (SELECT COUNT(*) FROM `{cand}`),\n"
+        f"    (SELECT COUNT(*) FROM `{src}`) "
+        f"* ((SELECT COUNT(*) FROM `{src}`) - 1) / 2.0\n"
         f"  ) AS {BLOCKING_METRIC_REDUCTION_RATIO},\n"
         f"  CURRENT_TIMESTAMP() AS {BLOCKING_METRIC_COMPUTED_AT}"
     )

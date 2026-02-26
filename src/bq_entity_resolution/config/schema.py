@@ -11,13 +11,14 @@ imports continue to work unchanged.
 """
 
 # Re-export all models from domain-specific sub-modules
-from bq_entity_resolution.config.models.source import *  # noqa: F401,F403
-from bq_entity_resolution.config.models.features import *  # noqa: F401,F403
+# ruff: noqa: F405
 from bq_entity_resolution.config.models.blocking import *  # noqa: F401,F403
-from bq_entity_resolution.config.models.matching import *  # noqa: F401,F403
-from bq_entity_resolution.config.models.reconciliation import *  # noqa: F401,F403
+from bq_entity_resolution.config.models.features import *  # noqa: F401,F403
 from bq_entity_resolution.config.models.infrastructure import *  # noqa: F401,F403
+from bq_entity_resolution.config.models.matching import *  # noqa: F401,F403
 from bq_entity_resolution.config.models.pipeline import *  # noqa: F401,F403
+from bq_entity_resolution.config.models.reconciliation import *  # noqa: F401,F403
+from bq_entity_resolution.config.models.source import *  # noqa: F401,F403
 
 __all__ = [
     # source
@@ -41,7 +42,10 @@ __all__ = [
     "ComparisonDef",
     "ThresholdConfig",
     "HardNegativeDef",
+    "HardPositiveDef",
     "SoftSignalDef",
+    "ScoreBandDef",
+    "ScoreBandingConfig",
     "TrainingConfig",
     "LabelFeedbackConfig",
     "ActiveLearningConfig",
@@ -50,6 +54,7 @@ __all__ = [
     "ClusteringConfig",
     "FieldMergeStrategy",
     "CanonicalSelectionConfig",
+    "ConfidenceShapingConfig",
     "AuditTrailConfig",
     "OutputConfig",
     "ReconciliationConfig",
@@ -66,6 +71,7 @@ __all__ = [
     "ClusterQualityConfig",
     "MonitoringConfig",
     "ScaleConfig",
+    "ExecutionConfig",
     # pipeline (root)
     "PipelineConfig",
 ]

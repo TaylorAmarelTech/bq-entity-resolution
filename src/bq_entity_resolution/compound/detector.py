@@ -7,7 +7,6 @@ a structured API for generating detection expressions and filter clauses.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from bq_entity_resolution.compound.patterns import (
     CONJUNCTION_RE,

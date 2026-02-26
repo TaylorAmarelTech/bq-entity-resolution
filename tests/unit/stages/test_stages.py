@@ -4,20 +4,17 @@ These tests verify that stages produce valid SQL using the builders,
 without requiring BigQuery or DuckDB.
 """
 
-import pytest
 
-from bq_entity_resolution.stages.base import Stage, TableRef
-from bq_entity_resolution.stages.staging import StagingStage
-from bq_entity_resolution.stages.features import FeatureEngineeringStage, TermFrequencyStage
+from bq_entity_resolution.stages.base import Stage
 from bq_entity_resolution.stages.blocking import BlockingStage
+from bq_entity_resolution.stages.features import FeatureEngineeringStage
 from bq_entity_resolution.stages.matching import MatchingStage
 from bq_entity_resolution.stages.reconciliation import (
     ClusteringStage,
-    GoldOutputStage,
     ClusterQualityStage,
+    GoldOutputStage,
 )
-from bq_entity_resolution.stages.active_learning import ActiveLearningStage
-
+from bq_entity_resolution.stages.staging import StagingStage
 
 # -- Minimal config fixture --
 
@@ -89,6 +86,7 @@ def _make_minimal_config():
         keys=["bk_soundex"],
         lsh_keys=[],
         candidate_limit=0,
+        bucket_size_limit=0,
     )
 
     blocking_config = NS(
@@ -114,6 +112,7 @@ def _make_minimal_config():
         min_score=1.0,
         match_threshold=None,
         log_prior_odds=0.0,
+        min_matching_comparisons=0,
     )
 
     active_learning_config = NS(
@@ -128,7 +127,9 @@ def _make_minimal_config():
         comparisons=[comp1],
         threshold=threshold,
         hard_negatives=[],
+        hard_positives=[],
         soft_signals=[],
+        score_banding=NS(enabled=False, bands=[]),
         active_learning=active_learning_config,
         confidence=None,
     )
@@ -141,19 +142,24 @@ def _make_minimal_config():
     canonical_selection = NS(
         method="completeness",
         source_priority=[],
+        field_strategies=[],
+        default_field_strategy="most_complete",
     )
 
+    audit_trail = NS(enabled=False)
     clustering = NS(max_iterations=20)
+    output = NS(
+        include_match_metadata=True,
+        entity_id_prefix="ENT",
+        partition_column=None,
+        cluster_columns=[],
+        audit_trail=audit_trail,
+    )
     reconciliation = NS(
         canonical_selection=canonical_selection,
         clustering=clustering,
-    )
-
-    output = NS(
-        include_match_metadata=True,
-        entity_id_prefix="ent",
-        partition_column=None,
-        cluster_columns=[],
+        output=output,
+        strategy="tier_priority",
     )
 
     monitoring = NS(
@@ -174,13 +180,20 @@ def _make_minimal_config():
 
     embeddings = NS(enabled=False)
 
+    feature_engineering = NS(
+        entity_type_column="",
+        groups=[feat_group],
+        blocking_keys=[bk1],
+        composite_keys=[ck1],
+    )
+
     config = NS(
         project=project,
         sources=[source],
         features=features_config,
+        feature_engineering=feature_engineering,
         incremental=incremental_config,
         reconciliation=reconciliation,
-        output=output,
         monitoring=monitoring,
         scale=scale,
         embeddings=embeddings,
@@ -197,6 +210,17 @@ def _make_minimal_config():
         return [tier]
 
     config.enabled_tiers = enabled_tiers
+
+    # Effective signal merging (global + tier)
+    config.effective_hard_negatives = lambda t: list(
+        getattr(t, "hard_negatives", [])
+    )
+    config.effective_hard_positives = lambda t: list(
+        getattr(t, "hard_positives", [])
+    )
+    config.effective_soft_signals = lambda t: list(
+        getattr(t, "soft_signals", [])
+    )
 
     return config, source, tier
 
@@ -309,7 +333,7 @@ class TestMatchingStage:
         sql = exprs[0].render()
         assert "CREATE OR REPLACE TABLE" in sql
         assert "total_score" in sql
-        assert "score_name_exact" in sql
+        assert "match_score_" in sql
 
 
 class TestClusteringStage:

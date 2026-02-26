@@ -1,13 +1,26 @@
-# Probabilistic Entity Resolution Example
-#
+# ============================================================================
+# Probabilistic Entity Resolution Example (Fellegi-Sunter)
+# ============================================================================
 # Demonstrates Fellegi-Sunter matching with:
 # - Multi-level comparison outcomes (exact → fuzzy → no match)
-# - Manual m/u probabilities
-# - EM-based parameter estimation
+# - EM-based automatic parameter estimation
+# - Manual m/u probability specification
 # - Active learning review queue
+#
+# Key concept: Fellegi-Sunter scoring
+#   Each comparison produces a log-likelihood ratio: log2(m/u)
+#   where m = P(outcome | match) and u = P(outcome | non-match).
+#   High m/u → strong evidence of match; low m/u → evidence of non-match.
+#   The total score is the sum of log-weights across all comparisons.
+#
+# Tuning tips:
+#   - If EM doesn't converge: increase em_sample_size or em_max_iterations
+#   - If matches are too aggressive: raise match_threshold
+#   - Use active_learning to get labeled pairs, then switch to labeled training
 #
 # This config deduplicates a generic person/company dataset.
 # Adapt the source table, columns, and features to your schema.
+# ============================================================================
 
 version: "1.0"
 
@@ -64,7 +77,7 @@ feature_engineering:
         function: soundex
         input: last_name_clean
       - name: nickname_key
-        function: nickname_match_key
+        function: nickname_match_key       # Maps "Bob"→"Robert", "Liz"→"Elizabeth"
         input: first_name_clean
 
   address_features:
@@ -88,13 +101,13 @@ feature_engineering:
         function: lower_trim
         input: email
       - name: email_dom
-        function: email_domain
+        function: email_domain             # Extract domain: user@gmail.com → gmail.com
         input: email
 
   blocking_keys:
     - name: bk_soundex_zip
       function: farm_fingerprint_concat
-      inputs: [last_name_soundex, zip5]
+      inputs: [last_name_soundex, zip5]    # Phonetic last name + zip
     - name: bk_last_first
       function: farm_fingerprint_concat
       inputs: [last_name_clean, first_name_clean]
@@ -107,15 +120,36 @@ feature_engineering:
       function: farm_fingerprint_concat
       inputs: [first_name_clean, last_name_clean, zip5, phone_std]
 
-# Global training config (applied to all F-S tiers that don't override)
+# ============================================================================
+# Global Training Configuration
+# ============================================================================
+# EM (Expectation-Maximization) estimates m/u probabilities from unlabeled data.
+# Applied to all fellegi_sunter tiers that don't override with their own training.
+#
+# How EM works:
+#   1. Sample N candidate pairs
+#   2. Initialize: assume m=0.9, u=0.1 for all levels
+#   3. E-step: compute P(match | observed comparisons) for each pair
+#   4. M-step: update m/u from weighted counts
+#   5. Repeat until convergence (parameters stop changing)
+#
+# em_sample_size: More pairs = better estimates but slower. 10K-100K is typical.
+# em_initial_match_proportion: Prior probability that a random pair is a match.
+#   For dedup: 0.01-0.1 (most pairs are non-matches).
+#   For linkage with strong blocking: 0.1-0.3 may be appropriate.
+
 training:
   method: em
   em_max_iterations: 10
   em_sample_size: 100000
-  em_initial_match_proportion: 0.05
+  em_initial_match_proportion: 0.05      # 5% prior match rate
 
 matching_tiers:
-  # Tier 1: Exact composite match (deterministic, not probabilistic)
+  # =========================================================================
+  # Tier 1: Deterministic exact composite match (not probabilistic)
+  # =========================================================================
+  # This tier uses simple sum scoring, not Fellegi-Sunter.
+  # If all four fields match exactly, it's definitely the same person.
   - name: exact_composite
     description: "Exact match on name + zip + phone"
     blocking:
@@ -128,11 +162,24 @@ matching_tiers:
         method: exact
         weight: 10.0
     threshold:
-      method: sum
+      method: sum                        # Simple sum, not F-S
       min_score: 10.0
     confidence: 1.0
 
-  # Tier 2: Probabilistic fuzzy name matching (EM-trained)
+  # =========================================================================
+  # Tier 2: Fellegi-Sunter with EM-trained parameters
+  # =========================================================================
+  # Multi-level comparisons: each comparison has 2-4 possible outcomes.
+  # EM will automatically estimate m/u for each level.
+  #
+  # Example: first_name comparison has 4 levels:
+  #   exact  → high m (~0.95), low u (~0.02) → strong positive evidence
+  #   fuzzy_high → moderate m, moderate u → some positive evidence
+  #   fuzzy_low  → low m, high u → weak evidence
+  #   else       → very low m, very high u → negative evidence
+  #
+  # The "else" level (no method) is the catch-all fallthrough.
+  # It MUST be last and provides the non-match baseline.
   - name: probabilistic_name
     description: "Fellegi-Sunter with multi-level name comparisons"
     blocking:
@@ -142,21 +189,23 @@ matching_tiers:
         - keys: [bk_email]
           candidate_limit: 200
     comparisons:
+      # First name: 4 levels (exact → high fuzzy → low fuzzy → else)
       - left: first_name_clean
         right: first_name_clean
         method: jaro_winkler
         levels:
           - label: exact
             method: exact
-            # m/u will be estimated by EM
+            # m/u will be estimated by EM (no manual values needed)
           - label: fuzzy_high
             method: jaro_winkler
             params: { threshold: 0.9 }
           - label: fuzzy_low
             method: jaro_winkler
             params: { threshold: 0.7 }
-          - label: else
+          - label: else                  # Catch-all: none of the above matched
 
+      # Last name: 3 levels (exact → fuzzy → else)
       - left: last_name_clean
         right: last_name_clean
         method: levenshtein
@@ -168,6 +217,7 @@ matching_tiers:
             params: { max_distance: 2 }
           - label: else
 
+      # Zip: 2 levels (exact → else). Binary comparison.
       - left: zip5
         right: zip5
         method: exact
@@ -176,6 +226,7 @@ matching_tiers:
             method: exact
           - label: else
 
+      # Phone: 2 levels (exact → else)
       - left: phone_std
         right: phone_std
         method: exact
@@ -184,6 +235,8 @@ matching_tiers:
             method: exact
           - label: else
 
+      # Email domain: 2 levels (exact → else)
+      # Same domain is weak evidence; different domain is slight negative evidence.
       - left: email_dom
         right: email_dom
         method: exact
@@ -194,29 +247,46 @@ matching_tiers:
 
     threshold:
       method: fellegi_sunter
-      match_threshold: 6.0
+      match_threshold: 6.0               # Sum of log2(m/u) must exceed 6.0
 
     hard_negatives:
       - left: last_name_clean
         method: different
-        action: disqualify
+        action: disqualify               # Different last name = definitely not a match
 
     soft_signals:
       - left: state_clean
         method: exact
-        bonus: 0.5
+        bonus: 0.5                       # Same state = mild supporting evidence
 
+    # Active learning: generate a review queue of uncertain pairs.
+    # Human reviewers label these as match/non-match, improving future runs.
     active_learning:
       enabled: true
-      queue_size: 500
-      uncertainty_window: 0.15
+      review_queue_table: "${BQ_PROJECT}.er_silver.al_review_queue_probabilistic_name"
+      queue_size: 500                    # Max pairs to review per run
+      uncertainty_window: 0.15           # Score range around threshold to sample from
 
-  # Tier 3: Manual m/u (for expert-tuned comparisons)
+  # =========================================================================
+  # Tier 3: Manual m/u specification (expert-tuned)
+  # =========================================================================
+  # When you have domain expertise, you can set m/u directly.
+  # This tier is DISABLED by default — enable it when you're ready.
+  #
+  # How to read m/u values:
+  #   m (match rate):     P(this outcome | pair IS a true match)
+  #   u (unmatch rate):   P(this outcome | pair is NOT a match)
+  #   log_weight:         Automatically computed as log2(m/u)
+  #
+  # Example: first_name exact match
+  #   m=0.95 → 95% of true matches have exact first names
+  #   u=0.08 →  8% of non-matches happen to have the same first name
+  #   log_weight = log2(0.95/0.08) = 3.57 (strong positive evidence)
   - name: manual_probabilistic
     description: "Fellegi-Sunter with manually specified m/u"
-    enabled: false  # Enable when you have domain expertise for m/u
+    enabled: false                       # Enable when you have domain expertise
     training:
-      method: none  # Override global — use manual m/u below
+      method: none                       # Override global EM — use manual m/u below
     blocking:
       paths:
         - keys: [bk_last_first]
@@ -228,16 +298,16 @@ matching_tiers:
         levels:
           - label: exact
             method: exact
-            m: 0.95
-            u: 0.08
+            m: 0.95                      # 95% of matches have exact first name
+            u: 0.08                      # 8% of non-matches share first name
           - label: fuzzy
             method: jaro_winkler
             params: { threshold: 0.85 }
-            m: 0.70
-            u: 0.15
+            m: 0.70                      # 70% of matches have fuzzy first name
+            u: 0.15                      # 15% of non-matches are fuzzy-similar
           - label: else
-            m: 0.05
-            u: 0.77
+            m: 0.05                      # Only 5% of matches have dissimilar names
+            u: 0.77                      # 77% of non-matches have dissimilar names
 
       - left: last_name_clean
         right: last_name_clean
@@ -256,14 +326,15 @@ matching_tiers:
             m: 0.08
             u: 0.85
 
+      # DOB is highly discriminative: if it matches, very strong evidence.
       - left: dob
         right: dob
         method: exact
         levels:
           - label: exact
             method: exact
-            m: 0.98
-            u: 0.003
+            m: 0.98                      # Almost all matches share DOB
+            u: 0.003                     # Only 0.3% chance of random DOB collision
           - label: else
             m: 0.02
             u: 0.997
@@ -271,13 +342,17 @@ matching_tiers:
       method: fellegi_sunter
       match_threshold: 8.0
 
+# ============================================================================
+# Reconciliation
+# ============================================================================
+
 reconciliation:
   strategy: tier_priority
   clustering:
     method: connected_components
     max_iterations: 20
   canonical_selection:
-    method: completeness
+    method: completeness                 # Most-complete record becomes canonical
   output:
-    include_match_metadata: true
+    include_match_metadata: true         # Include match scores in gold output
     entity_id_prefix: ENT

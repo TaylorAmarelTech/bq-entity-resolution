@@ -8,8 +8,8 @@ Soft signals adjust the match score up or down based on supporting evidence
 from __future__ import annotations
 
 from bq_entity_resolution.config.schema import SoftSignalDef
-from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
 from bq_entity_resolution.exceptions import SQLGenerationError
+from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS, _validated_call
 
 
 def build_soft_signal_expr(ss: SoftSignalDef) -> dict:
@@ -36,7 +36,7 @@ def build_soft_signal_expr(ss: SoftSignalDef) -> dict:
             f"Available: {sorted(COMPARISON_FUNCTIONS.keys())}"
         )
 
-    sql_condition = func(ss.left, right)
+    sql_condition = _validated_call(func, ss.left, right)
 
     return {
         "sql_condition": sql_condition,

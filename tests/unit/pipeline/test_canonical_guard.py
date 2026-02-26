@@ -1,8 +1,8 @@
 """Tests for canonical index table support."""
 
 from bq_entity_resolution.config.schema import (
-    BlockingPathDef,
     BlockingKeyDef,
+    BlockingPathDef,
     ColumnMapping,
     ComparisonDef,
     FeatureEngineeringConfig,
@@ -35,7 +35,12 @@ def _minimal_config(cross_batch: bool = False) -> PipelineConfig:
             ),
         ],
         feature_engineering=FeatureEngineeringConfig(
-            blocking_keys=[BlockingKeyDef(name="bk1", function="farm_fingerprint", inputs=["name"])],
+            blocking_keys=[
+                BlockingKeyDef(
+                    name="bk1", function="farm_fingerprint",
+                    inputs=["name"],
+                ),
+            ],
         ),
         matching_tiers=[
             MatchingTierConfig(
@@ -71,7 +76,7 @@ def test_incremental_cluster_builder_exists():
 
 
 def test_populate_canonical_index_builder_exists():
-    """Populate canonical index builder generates SQL to upsert entities."""
+    """Populate canonical index builder generates MERGE SQL to upsert entities."""
     params = PopulateCanonicalIndexParams(
         canonical_table="proj.gold.canonical_index",
         source_table="proj.silver.featured",
@@ -79,7 +84,9 @@ def test_populate_canonical_index_builder_exists():
     )
     sql = build_populate_canonical_index_sql(params).render()
     assert "canonical_index" in sql
-    assert "INSERT INTO" in sql
+    assert "MERGE INTO" in sql
+    assert "WHEN NOT MATCHED THEN" in sql
+    assert "INSERT ROW" in sql
 
 
 def test_cross_batch_config_accepted():

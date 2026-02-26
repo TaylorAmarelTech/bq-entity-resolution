@@ -5,6 +5,7 @@ Extracted from PipelineOrchestrator._generate_review_queues().
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import (
@@ -12,8 +13,8 @@ from bq_entity_resolution.config.schema import (
     PipelineConfig,
 )
 from bq_entity_resolution.naming import (
-    review_queue_table,
     matches_table,
+    review_queue_table,
 )
 from bq_entity_resolution.sql.builders.active_learning import (
     ActiveLearningParams,
@@ -21,6 +22,8 @@ from bq_entity_resolution.sql.builders.active_learning import (
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class ActiveLearningStage(Stage):
@@ -60,6 +63,7 @@ class ActiveLearningStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate active learning review queue SQL."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         al_config = self._tier.active_learning
         is_fs = self._tier.threshold.method == "fellegi_sunter"
 

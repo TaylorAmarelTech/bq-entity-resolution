@@ -8,3 +8,31 @@ Core components:
 - gates: Runtime data quality assertions
 - diagnostics: Structured error reporting
 """
+
+from bq_entity_resolution.pipeline.executor import (
+    PipelineExecutor,
+    PipelineResult,
+    StageExecutionResult,
+)
+from bq_entity_resolution.pipeline.gates import (
+    DataQualityGate,
+    GateResult,
+)
+from bq_entity_resolution.pipeline.plan import (
+    PipelinePlan,
+    StagePlan,
+)
+from bq_entity_resolution.pipeline.validator import (
+    ContractViolation,
+)
+
+__all__ = [
+    "ContractViolation",
+    "DataQualityGate",
+    "GateResult",
+    "PipelineExecutor",
+    "PipelinePlan",
+    "PipelineResult",
+    "StageExecutionResult",
+    "StagePlan",
+]

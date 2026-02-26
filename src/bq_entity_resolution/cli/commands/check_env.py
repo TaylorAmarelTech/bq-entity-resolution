@@ -28,7 +28,7 @@ def check_env(config: str | None) -> None:
 
     # Python version
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if sys.version_info >= (3, 11):
+    if sys.version_info >= (3, 11):  # noqa: UP036 — runtime user-facing check
         ok.append(f"Python {py_version}")
     else:
         issues.append(f"Python {py_version} (requires 3.11+)")
@@ -99,16 +99,16 @@ def check_env(config: str | None) -> None:
                 try:
                     from google.cloud import bigquery as _bq2
 
-                    client = _bq2.Client(project=cfg.project.bq_project)
-                    for source in cfg.sources:
-                        parts = source.table.split(".")
-                        if len(parts) >= 2:
-                            ds_ref = f"{parts[0]}.{parts[1]}"
-                            try:
-                                client.get_dataset(ds_ref)
-                                ok.append(f"Dataset accessible: {ds_ref}")
-                            except Exception:
-                                issues.append(f"Dataset not accessible: {ds_ref}")
+                    with _bq2.Client(project=cfg.project.bq_project) as client:
+                        for source in cfg.sources:
+                            parts = source.table.split(".")
+                            if len(parts) >= 2:
+                                ds_ref = f"{parts[0]}.{parts[1]}"
+                                try:
+                                    client.get_dataset(ds_ref)
+                                    ok.append(f"Dataset accessible: {ds_ref}")
+                                except Exception:
+                                    issues.append(f"Dataset not accessible: {ds_ref}")
                 except Exception:
                     pass  # BQ client errors already covered
         except Exception as exc:

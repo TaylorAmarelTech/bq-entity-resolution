@@ -116,6 +116,7 @@ def _make_config():
         min_score=1.0,
         match_threshold=None,
         log_prior_odds=0.0,
+        min_matching_comparisons=0,
     )
     al = NS(enabled=False, queue_size=100, uncertainty_window=0.3)
     tier = NS(
@@ -157,6 +158,7 @@ def _make_config():
     )
     scale = NS(checkpoint_enabled=False, max_bytes_billed=None)
     embeddings = NS(enabled=False)
+    execution = NS(skip_stages=[])
 
     config = NS(
         project=project,
@@ -168,6 +170,7 @@ def _make_config():
         monitoring=monitoring,
         scale=scale,
         embeddings=embeddings,
+        execution=execution,
         link_type=None,
     )
 

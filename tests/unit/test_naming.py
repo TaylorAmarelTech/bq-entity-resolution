@@ -1,23 +1,23 @@
 """Tests for centralized table naming."""
 
 from bq_entity_resolution.naming import (
-    staged_table,
-    featured_table,
-    candidates_table,
-    matches_table,
     all_matches_table,
-    cluster_table,
-    resolved_table,
+    candidates_table,
     canonical_index_table,
-    embeddings_table,
-    lsh_buckets_table,
-    udf_dataset,
-    parameters_table,
-    review_queue_table,
-    labels_table,
-    term_frequency_table,
-    sql_audit_table,
     checkpoint_table,
+    cluster_table,
+    embeddings_table,
+    featured_table,
+    labels_table,
+    lsh_buckets_table,
+    matches_table,
+    parameters_table,
+    resolved_table,
+    review_queue_table,
+    sql_audit_table,
+    staged_table,
+    term_frequency_table,
+    udf_dataset,
 )
 
 

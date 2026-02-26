@@ -6,6 +6,7 @@ Uses the blocking SQL builder for SQL generation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import (
@@ -23,6 +24,8 @@ from bq_entity_resolution.sql.builders.blocking import (
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class BlockingStage(Stage):
@@ -73,6 +76,7 @@ class BlockingStage(Stage):
         kwargs:
             excluded_pairs_table: str | None — table of already-matched pairs
         """
+        logger.debug("Planning %s stage", self.__class__.__name__)
         excluded = kwargs.get("excluded_pairs_table")
         tier = self._tier
         blocking = tier.blocking
@@ -84,8 +88,9 @@ class BlockingStage(Stage):
                 BlockingPath(
                     index=i,
                     keys=list(path.keys),
-                    lsh_keys=list(getattr(path, "lsh_keys", [])),
-                    candidate_limit=getattr(path, "candidate_limit", 0),
+                    lsh_keys=list(path.lsh_keys),
+                    candidate_limit=path.candidate_limit,
+                    bucket_size_limit=path.bucket_size_limit,
                 )
             )
 
@@ -97,7 +102,7 @@ class BlockingStage(Stage):
 
         # Determine canonical table for cross-batch
         canonical_table = None
-        if getattr(blocking, "cross_batch", False):
+        if blocking.cross_batch:
             from bq_entity_resolution.naming import canonical_index_table
             canonical_table = canonical_index_table(self._config)
 
@@ -106,11 +111,28 @@ class BlockingStage(Stage):
             source_table=featured_table(self._config),
             blocking_paths=paths,
             tier_name=tier.name,
-            cross_batch=getattr(blocking, "cross_batch", False),
+            cross_batch=blocking.cross_batch,
             canonical_table=canonical_table,
             excluded_pairs_table=excluded,
             lsh_table=lsh_table,
-            link_type=getattr(self._config, "link_type", None),
+            link_type=self._config.link_type,
+        )
+
+        # Log blocking effectiveness summary
+        path_details = []
+        for p in paths:
+            keys_desc = ", ".join(p.keys)
+            lsh_desc = f" + {len(p.lsh_keys)} LSH keys" if p.lsh_keys else ""
+            limit_desc = f" (limit={p.candidate_limit})" if p.candidate_limit else ""
+            path_details.append(f"path[{p.index}]: [{keys_desc}]{lsh_desc}{limit_desc}")
+        logger.info(
+            "Blocking summary for tier '%s': %d path(s), cross_batch=%s, "
+            "excluded_pairs=%s. %s",
+            tier.name,
+            len(paths),
+            blocking.cross_batch,
+            excluded is not None,
+            "; ".join(path_details),
         )
 
         return [build_blocking_sql(params)]

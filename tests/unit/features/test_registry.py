@@ -1,6 +1,5 @@
 """Tests for feature function registry."""
 
-import pytest
 
 from bq_entity_resolution.features.registry import FEATURE_FUNCTIONS
 

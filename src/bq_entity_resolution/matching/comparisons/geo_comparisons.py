@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from bq_entity_resolution.matching.comparisons import register
-
+from bq_entity_resolution.sql.utils import validate_identifier
 
 # ---------------------------------------------------------------------------
 # Geo-spatial comparisons
@@ -35,6 +35,10 @@ def geo_within_km(
     left/right are latitude columns; left_lon/right_lon are longitude columns.
     Uses BigQuery ST_DISTANCE for geodesic accuracy.
     """
+    if left_lon:
+        validate_identifier(left_lon, context="geo_within_km left_lon column")
+    if right_lon:
+        validate_identifier(right_lon, context="geo_within_km right_lon column")
     return (
         f"(ST_DISTANCE("
         f"ST_GEOGPOINT(l.{left_lon}, l.{left}), "
@@ -59,6 +63,10 @@ def geo_distance_score(
     Score = 1 - (distance_km / max_km), clamped to [0, 1].
     left/right are latitude columns; left_lon/right_lon are longitude columns.
     """
+    if left_lon:
+        validate_identifier(left_lon, context="geo_distance_score left_lon column")
+    if right_lon:
+        validate_identifier(right_lon, context="geo_distance_score right_lon column")
     return (
         f"CASE WHEN l.{left} IS NOT NULL AND r.{right} IS NOT NULL "
         f"AND l.{left_lon} IS NOT NULL AND r.{right_lon} IS NOT NULL "

@@ -1,11 +1,10 @@
 """Tests for term frequency adjustments in matching."""
 
-from bq_entity_resolution.config.schema import (
-    TermFrequencyConfig,
-)
 from bq_entity_resolution.naming import term_frequency_table
 from bq_entity_resolution.sql.builders.comparison import (
     ComparisonDef as BuilderComparisonDef,
+)
+from bq_entity_resolution.sql.builders.comparison import (
     ComparisonLevel,
     FellegiSunterParams,
     SumScoringParams,
@@ -17,7 +16,6 @@ from bq_entity_resolution.sql.builders.features import (
     TFColumn,
     build_term_frequencies_sql,
 )
-
 
 # ---------------------------------------------------------------
 # TF SQL generation via builder

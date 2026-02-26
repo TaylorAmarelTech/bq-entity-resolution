@@ -4,16 +4,9 @@ Proves that the SQL builders produce SQL that runs against real data
 using the DuckDB backend, producing correct results.
 """
 
-from bq_entity_resolution.sql.builders.staging import (
-    StagingParams,
-    build_staging_sql,
-)
-from bq_entity_resolution.sql.builders.features import (
-    FeatureParams,
-    FeatureExpr,
-    TFColumn,
-    build_features_sql,
-    build_term_frequencies_sql,
+from bq_entity_resolution.sql.builders.active_learning import (
+    ActiveLearningParams,
+    build_active_learning_sql,
 )
 from bq_entity_resolution.sql.builders.blocking import (
     BlockingParams,
@@ -23,21 +16,26 @@ from bq_entity_resolution.sql.builders.blocking import (
 from bq_entity_resolution.sql.builders.comparison import (
     ComparisonDef,
     ComparisonLevel,
-    HardNegative,
-    SoftSignal,
-    Threshold,
-    SumScoringParams,
     FellegiSunterParams,
-    build_sum_scoring_sql,
+    SumScoringParams,
+    Threshold,
     build_fellegi_sunter_sql,
+    build_sum_scoring_sql,
 )
-from bq_entity_resolution.sql.builders.active_learning import (
-    ActiveLearningParams,
-    build_active_learning_sql,
+from bq_entity_resolution.sql.builders.features import (
+    FeatureExpr,
+    FeatureParams,
+    TFColumn,
+    build_features_sql,
+    build_term_frequencies_sql,
 )
 from bq_entity_resolution.sql.builders.gold_output import (
     GoldOutputParams,
     build_gold_output_sql,
+)
+from bq_entity_resolution.sql.builders.staging import (
+    StagingParams,
+    build_staging_sql,
 )
 
 
@@ -59,9 +57,9 @@ def test_staging_builder_executes(backend):
     """)
 
     params = StagingParams(
-        target_table="staged_customers",
+        target_table="p.d.staged_customers",
         source_name="crm",
-        source_table="raw_customers",
+        source_table="p.d.raw_customers",
         unique_key="customer_id",
         updated_at="updated_at",
         columns=["first_name", "last_name"],
@@ -80,8 +78,8 @@ def test_staging_builder_executes(backend):
 def test_features_builder_executes(backend):
     """Feature builder SQL runs and produces features."""
     params = FeatureParams(
-        target_table="featured_test",
-        source_tables=["featured"],
+        target_table="p.d.featured_test",
+        source_tables=["p.d.featured"],
         source_columns=["first_name", "last_name", "dob", "email"],
         feature_expressions=[
             FeatureExpr("upper_first", "UPPER(first_name)"),
@@ -130,8 +128,8 @@ def test_term_frequency_builder_executes(backend):
 def test_blocking_builder_executes(backend):
     """Blocking builder produces correct candidate pairs."""
     params = BlockingParams(
-        target_table="candidates_builder",
-        source_table="featured",
+        target_table="p.d.candidates_builder",
+        source_table="p.d.featured",
         blocking_paths=[
             BlockingPath(index=0, keys=["name_soundex"]),
         ],
@@ -148,8 +146,8 @@ def test_blocking_builder_executes(backend):
 def test_blocking_builder_link_only(backend):
     """Blocking with link_only restricts to cross-source."""
     params = BlockingParams(
-        target_table="candidates_link",
-        source_table="featured",
+        target_table="p.d.candidates_link",
+        source_table="p.d.featured",
         blocking_paths=[
             BlockingPath(index=0, keys=["name_soundex"]),
         ],
@@ -182,13 +180,16 @@ def test_sum_scoring_builder_executes(backend):
     params = SumScoringParams(
         tier_name="sum_test",
         tier_index=0,
-        matches_table="matches_sum",
-        candidates_table="cand_sum",
-        source_table="featured",
+        matches_table="p.d.matches_sum",
+        candidates_table="p.d.cand_sum",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="name_exact",
-                sql_expr="l.first_name_clean = r.first_name_clean AND l.first_name_clean IS NOT NULL",
+                sql_expr=(
+                    "l.first_name_clean = r.first_name_clean"
+                    " AND l.first_name_clean IS NOT NULL"
+                ),
                 weight=2.0,
             ),
             ComparisonDef(
@@ -232,9 +233,9 @@ def test_fs_scoring_builder_executes(backend):
     params = FellegiSunterParams(
         tier_name="fs_test",
         tier_index=1,
-        matches_table="matches_fs",
-        candidates_table="cand_fs",
-        source_table="featured",
+        matches_table="p.d.matches_fs",
+        candidates_table="p.d.cand_fs",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="name",
@@ -309,8 +310,8 @@ def test_active_learning_builder_executes(backend):
     """)
 
     params = ActiveLearningParams(
-        review_table="review_queue",
-        matches_table="al_matches",
+        review_table="p.d.review_queue",
+        matches_table="p.d.al_matches",
         queue_size=10,
         uncertainty_window=0.5,
         is_fellegi_sunter=True,
@@ -330,8 +331,8 @@ def test_end_to_end_pipeline_builders(backend):
     """End-to-end: blocking -> scoring -> output using all builders."""
     # Step 1: Blocking
     blocking = build_blocking_sql(BlockingParams(
-        target_table="e2e_candidates",
-        source_table="featured",
+        target_table="p.d.e2e_candidates",
+        source_table="p.d.featured",
         blocking_paths=[BlockingPath(index=0, keys=["name_soundex"])],
         tier_name="e2e",
     ))
@@ -341,13 +342,16 @@ def test_end_to_end_pipeline_builders(backend):
     scoring = build_sum_scoring_sql(SumScoringParams(
         tier_name="e2e",
         tier_index=0,
-        matches_table="e2e_matches",
-        candidates_table="e2e_candidates",
-        source_table="featured",
+        matches_table="p.d.e2e_matches",
+        candidates_table="p.d.e2e_candidates",
+        source_table="p.d.featured",
         comparisons=[
             ComparisonDef(
                 name="name",
-                sql_expr="l.first_name_clean = r.first_name_clean AND l.first_name_clean IS NOT NULL",
+                sql_expr=(
+                    "l.first_name_clean = r.first_name_clean"
+                    " AND l.first_name_clean IS NOT NULL"
+                ),
                 weight=2.0,
             ),
             ComparisonDef(
@@ -391,10 +395,10 @@ def test_end_to_end_pipeline_builders(backend):
 
     # Step 4: Gold output
     gold = build_gold_output_sql(GoldOutputParams(
-        target_table="e2e_resolved",
-        source_table="featured",
-        cluster_table="e2e_clusters",
-        matches_table="e2e_matches",
+        target_table="p.d.e2e_resolved",
+        source_table="p.d.featured",
+        cluster_table="p.d.e2e_clusters",
+        matches_table="p.d.e2e_matches",
         canonical_method="completeness",
         scoring_columns=["first_name", "last_name", "email"],
         source_columns=["first_name", "last_name", "dob", "email"],
@@ -408,7 +412,9 @@ def test_end_to_end_pipeline_builders(backend):
     assert resolved_count == 5
 
     rows = backend.execute_and_fetch(
-        "SELECT resolved_entity_id, is_canonical, first_name "
+        "SELECT resolved_entity_id, cluster_id, is_canonical, first_name "
         "FROM e2e_resolved ORDER BY entity_uid"
     )
-    assert all(r["resolved_entity_id"].startswith("test_") for r in rows)
+    # resolved_entity_id is now the raw cluster_id (INT64 in production),
+    # not a string-prefixed version like "test_123"
+    assert all(r["resolved_entity_id"] == r["cluster_id"] for r in rows)

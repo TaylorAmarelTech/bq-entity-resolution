@@ -57,23 +57,31 @@ _NICKNAME_PAIRS = [
 
 @register("name_clean")
 def name_clean(inputs: list[str], **_: Any) -> str:
-    """Uppercase, remove non-alpha (keep spaces/hyphens), collapse whitespace."""
+    """Uppercase, remove non-alpha (keep spaces/hyphens), collapse whitespace.
+
+    Returns NULL for empty strings (after cleaning) to prevent false
+    positives when two empty-string names are compared as equal.
+    """
     col = inputs[0]
     return (
-        f"TRIM(UPPER(REGEXP_REPLACE("
+        f"NULLIF(TRIM(UPPER(REGEXP_REPLACE("
         f"REGEXP_REPLACE({col}, r'[^a-zA-Z\\\\s\\\\-]', ''), "
-        f"r'\\\\s+', ' ')))"
+        f"r'\\\\s+', ' '))), '')"
     )
 
 
 @register("name_clean_strict")
 def name_clean_strict(inputs: list[str], **_: Any) -> str:
-    """Uppercase, remove everything except letters, collapse whitespace."""
+    """Uppercase, remove everything except letters, collapse whitespace.
+
+    Returns NULL for empty strings (after cleaning) to prevent false
+    positives when two empty-string names are compared as equal.
+    """
     col = inputs[0]
     return (
-        f"TRIM(UPPER(REGEXP_REPLACE("
+        f"NULLIF(TRIM(UPPER(REGEXP_REPLACE("
         f"REGEXP_REPLACE({col}, r'[^a-zA-Z\\\\s]', ''), "
-        f"r'\\\\s+', ' ')))"
+        f"r'\\\\s+', ' '))), '')"
     )
 
 
@@ -207,7 +215,6 @@ def nickname_match_key(inputs: list[str], **_: Any) -> str:
     BOB, BOBBY, ROBERT all hash to the same INT64 value. This enables
     fast INT64 equi-join blocking that automatically groups nicknames.
     """
-    col = inputs[0]
     # Reuse nickname_canonical logic
     canonical_expr = nickname_canonical(inputs)
     return f"FARM_FINGERPRINT({canonical_expr})"

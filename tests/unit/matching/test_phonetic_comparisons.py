@@ -1,7 +1,7 @@
 """Tests for phonetic comparison functions (Metaphone UDF-based)."""
 
-from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
 from bq_entity_resolution.features.registry import FEATURE_FUNCTIONS
+from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
 
 
 def test_metaphone_match_registered():

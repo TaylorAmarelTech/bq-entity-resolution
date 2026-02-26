@@ -5,10 +5,10 @@ import inspect
 from google.api_core.exceptions import InternalServerError, ServiceUnavailable, TooManyRequests
 
 from bq_entity_resolution.clients.bigquery import (
-    BigQueryClient,
     MAX_RETRIES,
     RETRY_DELAY_SECONDS,
     RETRYABLE_ERRORS,
+    BigQueryClient,
 )
 
 
@@ -33,10 +33,10 @@ def test_retryable_errors_tuple_length():
 
 
 def test_execute_and_fetch_has_timeout_param():
-    """execute_and_fetch accepts a timeout parameter."""
+    """execute_and_fetch accepts a timeout parameter (default None, uses default_timeout)."""
     sig = inspect.signature(BigQueryClient.execute_and_fetch)
     assert "timeout" in sig.parameters
-    assert sig.parameters["timeout"].default == 600
+    assert sig.parameters["timeout"].default is None
 
 
 def test_max_retries_constant():

@@ -1,9 +1,9 @@
 """Tests for the EM estimation SQL builder."""
 
 from bq_entity_resolution.sql.builders.em import (
-    EMParams,
     EMComparison,
     EMLevel,
+    EMParams,
     build_em_estimation_sql,
     build_em_mstep_sql,
 )
@@ -54,8 +54,8 @@ def test_em_estimation_basic():
 def test_em_estimation_sample_size():
     """Sample size limits candidate pairs."""
     params = EMParams(
-        candidates_table="c",
-        source_table="s",
+        candidates_table="p.d.candidates",
+        source_table="p.d.source",
         comparisons=[
             EMComparison(
                 name="x",
@@ -75,8 +75,8 @@ def test_em_estimation_sample_size():
 def test_em_estimation_convergence():
     """Convergence threshold appears in IF condition."""
     params = EMParams(
-        candidates_table="c",
-        source_table="s",
+        candidates_table="p.d.candidates",
+        source_table="p.d.source",
         comparisons=[
             EMComparison(
                 name="x",
@@ -96,8 +96,8 @@ def test_em_estimation_convergence():
 def test_em_estimation_multiple_comparisons():
     """Multiple comparisons generate multiple level columns."""
     params = EMParams(
-        candidates_table="c",
-        source_table="s",
+        candidates_table="p.d.candidates",
+        source_table="p.d.source",
         comparisons=[
             EMComparison(
                 name="name",
@@ -123,8 +123,8 @@ def test_em_estimation_multiple_comparisons():
 def test_em_estimation_init_values():
     """Initial m/u values are 0.9/0.1."""
     params = EMParams(
-        candidates_table="c",
-        source_table="s",
+        candidates_table="p.d.candidates",
+        source_table="p.d.source",
         comparisons=[
             EMComparison(
                 name="x",
@@ -143,8 +143,8 @@ def test_em_estimation_init_values():
 def test_em_estimation_zero_guard():
     """M-step uses COALESCE to guard against zero-count division."""
     params = EMParams(
-        candidates_table="c",
-        source_table="s",
+        candidates_table="p.d.candidates",
+        source_table="p.d.source",
         comparisons=[
             EMComparison(
                 name="x",
@@ -173,3 +173,36 @@ def test_em_mstep_standalone():
     assert "m_prob" in sql
     assert "u_prob" in sql
     assert "UNION ALL" in sql
+
+
+def test_em_comparison_validates_name():
+    """EMComparison rejects invalid comparison names (SQL injection prevention)."""
+    import pytest
+    with pytest.raises(ValueError, match="comparison_name"):
+        EMComparison(
+            name="name'; DROP TABLE--",
+            left="x",
+            right="x",
+        )
+
+
+def test_em_level_validates_label():
+    """EMLevel rejects invalid level labels (SQL injection prevention)."""
+    import pytest
+    with pytest.raises(ValueError, match="level_label"):
+        EMLevel(
+            label="exact; DROP",
+            sql_expr="l.x = r.x",
+        )
+
+
+def test_em_comparison_valid_name():
+    """EMComparison accepts valid identifier names."""
+    comp = EMComparison(name="first_name", left="x", right="x")
+    assert comp.name == "first_name"
+
+
+def test_em_level_valid_label():
+    """EMLevel accepts valid identifier labels."""
+    level = EMLevel(label="exact_match", sql_expr="l.x = r.x")
+    assert level.label == "exact_match"

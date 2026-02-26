@@ -5,8 +5,8 @@ Pipeline run context: carries state through pipeline execution.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.naming import all_matches_table as _all_matches_table
@@ -20,15 +20,15 @@ class PipelineContext:
     started_at: datetime
     config: PipelineConfig
     full_refresh: bool = False
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
     status: str = "running"
-    error: Optional[str] = None
+    error: str | None = None
     watermarks: dict[str, Any] = field(default_factory=dict)
     staged_sources: list[str] = field(default_factory=list)
     tier_results: dict[str, dict] = field(default_factory=dict)
     sql_log: list[dict] = field(default_factory=list)
-    cluster_quality: Optional[dict] = None
-    completed_stages: set = field(default_factory=set)
+    cluster_quality: dict | None = None
+    completed_stages: set[str] = field(default_factory=set)
 
     @property
     def all_matches_table(self) -> str:
@@ -41,7 +41,7 @@ class PipelineContext:
             "stage": stage,
             "step": step,
             "sql": sql,
-            "timestamp": datetime.now(tz=None).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         })
 
     @property
@@ -49,4 +49,4 @@ class PipelineContext:
         """Total pipeline duration in seconds."""
         if self.finished_at:
             return (self.finished_at - self.started_at).total_seconds()
-        return (datetime.now(tz=None) - self.started_at).total_seconds()
+        return (datetime.now(UTC) - self.started_at).total_seconds()

@@ -7,6 +7,7 @@ with explicit, actionable errors.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -15,6 +16,8 @@ from bq_entity_resolution.stages.base import TableRef
 
 if TYPE_CHECKING:
     from bq_entity_resolution.backends.protocol import Backend
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -85,7 +88,18 @@ class OutputNotEmptyGate(DataQualityGate):
                         ),
                         severity=self._severity,
                     )
-            except Exception:
+            except Exception as exc:
+                # "Table not found" is a gate check failure — report it.
+                # Unexpected errors in error-severity gates must propagate
+                # to prevent silent data quality failures.
+                err_str = str(exc).lower()
+                is_not_found = "not found" in err_str or "not exist" in err_str
+                if self._severity == "error" and not is_not_found:
+                    raise
+                logger.warning(
+                    "Gate check failed for output '%s' (%s): %s",
+                    key, ref.fq_name, exc,
+                )
                 return GateResult(
                     passed=False,
                     message=(
@@ -149,6 +163,10 @@ class ClusterSizeGate(DataQualityGate):
                     severity=severity,
                 )
         except Exception as e:
+            if self._abort_on_explosion:
+                # error-severity gate: propagate unexpected errors
+                raise
+            logger.warning("Gate check failed for cluster sizes: %s", e)
             return GateResult(
                 passed=False,
                 message=f"Failed to check cluster sizes: {e}",

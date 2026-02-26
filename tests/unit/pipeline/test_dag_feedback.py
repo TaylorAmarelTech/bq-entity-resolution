@@ -62,6 +62,7 @@ def _make_config_with_feedback():
     threshold = NS(
         method="score", min_score=1.0,
         match_threshold=None, log_prior_odds=0.0,
+        min_matching_comparisons=0,
     )
 
     label_feedback = NS(enabled=True, auto_retrain=True, min_labels_for_retrain=50)

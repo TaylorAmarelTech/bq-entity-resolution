@@ -7,9 +7,12 @@ configurations that feed entities into the pipeline.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+import re
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from bq_entity_resolution.sql.utils import validate_identifier
 
 __all__ = [
     "ColumnMapping",
@@ -17,14 +20,42 @@ __all__ = [
     "SourceConfig",
 ]
 
+# Valid BigQuery column types
+_VALID_BQ_TYPES = frozenset({
+    "STRING", "BYTES", "INT64", "INTEGER", "FLOAT64", "FLOAT",
+    "NUMERIC", "BIGNUMERIC", "DECIMAL", "BIGDECIMAL",
+    "BOOL", "BOOLEAN", "TIMESTAMP", "DATE", "TIME", "DATETIME",
+    "GEOGRAPHY", "JSON", "STRUCT", "ARRAY", "RECORD",
+})
+
 
 class ColumnMapping(BaseModel):
     """Maps a source column to a semantic role for automatic feature engineering."""
 
     name: str
     type: str = "STRING"
-    role: Optional[str] = None  # first_name, last_name, address_line_1, etc.
+    role: str | None = None  # first_name, last_name, address_line_1, etc.
     nullable: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name_identifier(cls, v: str) -> str:
+        validate_identifier(v, context="column mapping name")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _valid_bq_type(cls, v: str) -> str:
+        base = v.split("<")[0].split("(")[0].strip().upper()
+        if base not in _VALID_BQ_TYPES:
+            raise ValueError(
+                f"Unknown BigQuery type: {v!r}. "
+                f"Valid types: {', '.join(sorted(_VALID_BQ_TYPES))}"
+            )
+        return v
+
+
+_SQL_INJECTION_PATTERN = re.compile(r";\s*|--\s|/\*|\bDROP\b|\bALTER\b|\bCREATE\b|\bTRUNCATE\b|\bGRANT\b|\bREVOKE\b", re.IGNORECASE)
 
 
 class JoinConfig(BaseModel):
@@ -35,6 +66,36 @@ class JoinConfig(BaseModel):
     on: str  # SQL join condition
     type: Literal["LEFT", "INNER"] = "LEFT"
 
+    @field_validator("table")
+    @classmethod
+    def _validate_table(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("join table must be a non-empty string")
+        if "${" not in v:
+            parts = v.replace("`", "").split(".")
+            if len(parts) > 3:
+                raise ValueError(f"join table must be project.dataset.table format, got: {v!r}")
+        return v
+
+    @field_validator("alias")
+    @classmethod
+    def _validate_alias(cls, v: str) -> str:
+        if v:
+            validate_identifier(v, context="join alias")
+        return v
+
+    @field_validator("on")
+    @classmethod
+    def _validate_on(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("join ON condition must be a non-empty string")
+        if _SQL_INJECTION_PATTERN.search(v):
+            raise ValueError(
+                "join ON condition contains disallowed SQL pattern "
+                "(semicolons, comments, or DDL keywords)"
+            )
+        return v
+
 
 class SourceConfig(BaseModel):
     """A source table that feeds entities into the pipeline."""
@@ -43,13 +104,81 @@ class SourceConfig(BaseModel):
     table: str
     unique_key: str
     updated_at: str
-    partition_column: Optional[str] = None
+    partition_column: str | None = None
     columns: list[ColumnMapping]
     passthrough_columns: list[str] = Field(default_factory=list)
     joins: list[JoinConfig] = Field(default_factory=list)
-    filter: Optional[str] = None  # optional WHERE clause fragment
-    entity_type_column: Optional[str] = None
+    filter: str | None = None  # optional WHERE clause fragment
+    entity_type: str | None = None  # e.g. "Person", "Organization"
+    entity_type_column: str | None = None
     batch_size: int = 2_000_000
+
+    @field_validator("table")
+    @classmethod
+    def _validate_table_format(cls, v: str) -> str:
+        """Validate table reference format (project.dataset.table or dataset.table)."""
+        if not v or not v.strip():
+            raise ValueError("table must be a non-empty string")
+        # Allow env var placeholders like ${BQ_PROJECT}.dataset.table
+        if "${" in v:
+            return v  # Skip validation for env var interpolated values
+        parts = v.split(".")
+        if len(parts) > 3:
+            raise ValueError(
+                f"table must be in format 'project.dataset.table' or 'dataset.table', "
+                f"got '{v}' ({len(parts)} parts)"
+            )
+        return v
+
+    @field_validator("name", "unique_key", "updated_at")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        validate_identifier(v, context="source field")
+        return v
+
+    @field_validator("passthrough_columns")
+    @classmethod
+    def _validate_passthrough_columns(cls, v: list[str]) -> list[str]:
+        for col in v:
+            validate_identifier(col, context="passthrough column")
+        return v
+
+    @field_validator("partition_column")
+    @classmethod
+    def _validate_partition_column(cls, v: str | None) -> str | None:
+        if v:
+            validate_identifier(v, context="partition column")
+        return v
+
+    @field_validator("entity_type_column")
+    @classmethod
+    def _validate_entity_type_column(cls, v: str | None) -> str | None:
+        if v:
+            validate_identifier(v, context="entity_type_column")
+        return v
+
+    @field_validator("filter")
+    @classmethod
+    def _validate_filter_safe(cls, v: str | None) -> str | None:
+        if v is not None and _SQL_INJECTION_PATTERN.search(v):
+            raise ValueError(
+                "filter expression contains disallowed SQL pattern "
+                "(semicolons, comments, or DDL keywords)"
+            )
+        return v
+
+    @field_validator("batch_size")
+    @classmethod
+    def _positive_batch_size(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("batch_size must be >= 1")
+        if v > 100_000_000:
+            raise ValueError(
+                f"batch_size must be <= 100,000,000, got {v:,}"
+            )
+        return v
 
     @field_validator("columns")
     @classmethod
@@ -61,7 +190,7 @@ class SourceConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_column_names(self) -> "SourceConfig":
+    def _validate_column_names(self) -> SourceConfig:
         """Validate that column names are safe SQL identifiers."""
         from bq_entity_resolution.sql.utils import validate_identifier
         for col in self.columns:
@@ -78,10 +207,10 @@ class SourceConfig(BaseModel):
         backend: Any = None,
         unique_key: str = "id",
         updated_at: str = "updated_at",
-        name: Optional[str] = None,
-        exclude_columns: Optional[set[str]] = None,
+        name: str | None = None,
+        exclude_columns: set[str] | None = None,
         auto_roles: bool = True,
-    ) -> "SourceConfig":
+    ) -> SourceConfig:
         """Create a SourceConfig by discovering columns from a live table.
 
         Auto-detects column types from BigQuery INFORMATION_SCHEMA and

@@ -23,6 +23,7 @@ from bq_entity_resolution.columns import (
     RIGHT_ENTITY_UID,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import sql_escape, validate_table_ref
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,10 @@ class ActiveLearningParams:
     uncertainty_window: float = 0.3
     is_fellegi_sunter: bool = False
     min_score: float = 0.0
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.review_table)
+        validate_table_ref(self.matches_table)
 
 
 def build_active_learning_sql(params: ActiveLearningParams) -> SQLExpression:
@@ -105,6 +110,10 @@ class IngestLabelsParams:
     review_queue_table: str
     tier_name: str
 
+    def __post_init__(self) -> None:
+        validate_table_ref(self.labels_table)
+        validate_table_ref(self.review_queue_table)
+
 
 def build_ingest_labels_sql(params: IngestLabelsParams) -> SQLExpression:
     """Build SQL to ingest human labels from the review queue.
@@ -134,7 +143,7 @@ def build_ingest_labels_sql(params: IngestLabelsParams) -> SQLExpression:
     lines.append(
         f"    CASE WHEN {HUMAN_LABEL} = 'match' THEN TRUE ELSE FALSE END AS {IS_MATCH},"
     )
-    lines.append(f"    '{params.tier_name}' AS {MATCH_TIER_NAME},")
+    lines.append(f"    '{sql_escape(params.tier_name)}' AS {MATCH_TIER_NAME},")
     lines.append(f"    'active_learning' AS {LABEL_SOURCE},")
     lines.append(f"    CURRENT_TIMESTAMP() AS {INGESTED_AT}")
     lines.append(f"  FROM `{params.review_queue_table}`")

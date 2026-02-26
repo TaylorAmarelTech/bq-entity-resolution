@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from bq_entity_resolution.stages.reconciliation import ClusteringStage
 
-
 # -- Minimal config fixture --
 
 def _make_minimal_config(incremental_enabled: bool = False):

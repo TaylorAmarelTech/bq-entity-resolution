@@ -13,11 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bq_entity_resolution.columns import (
+    ENTITY_UID,
     LEFT_ENTITY_UID,
     RIGHT_ENTITY_UID,
-    ENTITY_UID,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,9 @@ class EMLevel:
     sql_expr: str
     has_expr: bool = True
 
+    def __post_init__(self) -> None:
+        validate_identifier(self.label, "level_label")
+
 
 @dataclass(frozen=True)
 class EMComparison:
@@ -35,6 +39,9 @@ class EMComparison:
     left: str
     right: str
     levels: list[EMLevel] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.name, "comparison_name")
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,10 @@ class EMParams:
     convergence_threshold: float = 0.001
     sample_size: int = 10000
     initial_match_proportion: float = 0.1
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.candidates_table)
+        validate_table_ref(self.source_table)
 
 
 def _all_expr_levels(comparisons: list[EMComparison]) -> list[tuple[str, str]]:
@@ -149,7 +160,7 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     for comp_name, level_label in all_levels:
         col = f"{comp_name}__{level_label}"
         alias = f"mp_{col}"
-        lines.append(f"      + CASE")
+        lines.append("      + CASE")
         lines.append(f"          WHEN p.{col} = 1.0")
         lines.append(
             f"          THEN LN(GREATEST({alias}.m_prob, 0.001))"
@@ -157,7 +168,7 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
         lines.append(
             f"          ELSE LN(GREATEST(1.0 - {alias}.m_prob, 0.001))"
         )
-        lines.append(f"        END")
+        lines.append("        END")
 
     lines.append("    ) AS log_match,")
 
@@ -167,7 +178,7 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     for comp_name, level_label in all_levels:
         col = f"{comp_name}__{level_label}"
         alias = f"mp_{col}"
-        lines.append(f"      + CASE")
+        lines.append("      + CASE")
         lines.append(f"          WHEN p.{col} = 1.0")
         lines.append(
             f"          THEN LN(GREATEST({alias}.u_prob, 0.001))"
@@ -175,7 +186,7 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
         lines.append(
             f"          ELSE LN(GREATEST(1.0 - {alias}.u_prob, 0.001))"
         )
-        lines.append(f"        END")
+        lines.append("        END")
 
     lines.append("    ) AS log_nonmatch")
     lines.append("  FROM _em_pairs p")
@@ -184,8 +195,8 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     for comp_name, level_label in all_levels:
         col = f"{comp_name}__{level_label}"
         alias = f"mp_{col}"
-        lines.append(f"  CROSS JOIN (")
-        lines.append(f"    SELECT m_prob, u_prob FROM _em_params")
+        lines.append("  CROSS JOIN (")
+        lines.append("    SELECT m_prob, u_prob FROM _em_params")
         lines.append(
             f"    WHERE comparison_name = '{comp_name}' "
             f"AND level_label = '{level_label}'"
@@ -195,8 +206,8 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     lines.append(";")
     lines.append("")
 
-    # Compute posterior match probability
-    lines.append("  CREATE OR REPLACE TEMP TABLE _em_pairs_new AS")
+    # Compute posterior match probability (CREATE OR REPLACE avoids DROP+RENAME)
+    lines.append("  CREATE OR REPLACE TEMP TABLE _em_pairs AS")
     lines.append("  SELECT")
     lines.append(f"    {LEFT_ENTITY_UID},")
     lines.append(f"    {RIGHT_ENTITY_UID},")
@@ -219,33 +230,28 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     lines.append("  );")
     lines.append("")
 
-    # Swap tables
-    lines.append("  DROP TABLE _em_pairs;")
-    lines.append("  ALTER TABLE _em_pairs_new RENAME TO _em_pairs;")
-    lines.append("")
-
     # M-step: update m/u from weighted counts
     lines.append("  CREATE OR REPLACE TEMP TABLE _em_params_new AS")
 
     m_step_parts: list[str] = []
     for comp_name, level_label in all_levels:
         col = f"{comp_name}__{level_label}"
-        m_step_parts.append(f"  SELECT")
+        m_step_parts.append("  SELECT")
         m_step_parts.append(f"    '{comp_name}' AS comparison_name,")
         m_step_parts.append(f"    '{level_label}' AS level_label,")
-        m_step_parts.append(f"    GREATEST(0.001, LEAST(0.999,")
-        m_step_parts.append(f"      COALESCE(SAFE_DIVIDE(")
+        m_step_parts.append("    GREATEST(0.001, LEAST(0.999,")
+        m_step_parts.append("      COALESCE(SAFE_DIVIDE(")
         m_step_parts.append(f"        SUM(match_weight * {col}),")
-        m_step_parts.append(f"        NULLIF(SUM(match_weight), 0)")
-        m_step_parts.append(f"      ), 0.5)")
-        m_step_parts.append(f"    )) AS m_prob,")
-        m_step_parts.append(f"    GREATEST(0.001, LEAST(0.999,")
-        m_step_parts.append(f"      COALESCE(SAFE_DIVIDE(")
+        m_step_parts.append("        NULLIF(SUM(match_weight), 0)")
+        m_step_parts.append("      ), 0.5)")
+        m_step_parts.append("    )) AS m_prob,")
+        m_step_parts.append("    GREATEST(0.001, LEAST(0.999,")
+        m_step_parts.append("      COALESCE(SAFE_DIVIDE(")
         m_step_parts.append(f"        SUM((1.0 - match_weight) * {col}),")
-        m_step_parts.append(f"        NULLIF(SUM(1.0 - match_weight), 0)")
-        m_step_parts.append(f"      ), 0.5)")
-        m_step_parts.append(f"    )) AS u_prob")
-        m_step_parts.append(f"  FROM _em_pairs")
+        m_step_parts.append("        NULLIF(SUM(1.0 - match_weight), 0)")
+        m_step_parts.append("      ), 0.5)")
+        m_step_parts.append("    )) AS u_prob")
+        m_step_parts.append("  FROM _em_pairs")
 
     lines.append("\n  UNION ALL\n".join(
         "\n".join(chunk)
@@ -269,8 +275,8 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     lines.append("  );")
     lines.append("")
 
-    # Update params
-    lines.append("  DROP TABLE _em_params;")
+    # Update params (IF EXISTS prevents errors on retry/resume)
+    lines.append("  DROP TABLE IF EXISTS _em_params;")
     lines.append("  ALTER TABLE _em_params_new RENAME TO _em_params;")
     lines.append("")
 
@@ -286,11 +292,11 @@ def build_em_estimation_sql(params: EMParams) -> SQLExpression:
     # Convergence check
     lines.append(f"  IF iteration >= {params.max_iterations}")
     lines.append(
-        f"     OR (max_delta < {params.convergence_threshold}"
+        f"     OR max_delta < {params.convergence_threshold}"
     )
     lines.append(
-        f"         AND ABS(log_likelihood - prev_log_likelihood) "
-        f"< {params.convergence_threshold}) THEN"
+        f"     OR ABS(log_likelihood - prev_log_likelihood) "
+        f"< {params.convergence_threshold} THEN"
     )
     lines.append("    LEAVE;")
     lines.append("  END IF;")
@@ -317,6 +323,10 @@ class LabelEstimationParams:
     labeled_pairs_table: str
     source_table: str
     comparisons: list[dict]  # [{name, left, right, levels: [{label, sql_expr, has_expr}]}]
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.labeled_pairs_table)
+        validate_table_ref(self.source_table)
 
 
 def build_estimate_from_labels_sql(

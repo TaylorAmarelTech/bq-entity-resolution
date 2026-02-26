@@ -3,6 +3,8 @@
 from bq_entity_resolution.config.schema import AuditTrailConfig
 from bq_entity_resolution.sql.builders.comparison import (
     ComparisonDef as BuilderComparisonDef,
+)
+from bq_entity_resolution.sql.builders.comparison import (
     ComparisonLevel,
     FellegiSunterParams,
     SumScoringParams,
@@ -10,7 +12,6 @@ from bq_entity_resolution.sql.builders.comparison import (
     build_fellegi_sunter_sql,
     build_sum_scoring_sql,
 )
-
 
 # ---------------------------------------------------------------
 # Config model tests

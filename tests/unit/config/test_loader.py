@@ -8,7 +8,6 @@ import pytest
 from bq_entity_resolution.config.loader import load_config
 from bq_entity_resolution.exceptions import ConfigurationError
 
-
 FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 
 
@@ -47,7 +46,7 @@ matching_tiers: []
 
     os.environ["TEST_BQ_PROJECT"] = "my-project-123"
     try:
-        cfg = load_config(str(config_file))
+        cfg = load_config(str(config_file), validate=False)
         assert cfg.project.bq_project == "my-project-123"
     finally:
         del os.environ["TEST_BQ_PROJECT"]
@@ -70,7 +69,7 @@ matching_tiers: []
     config_file = tmp_path / "config.yml"
     config_file.write_text(config_content)
 
-    cfg = load_config(str(config_file))
+    cfg = load_config(str(config_file), validate=False)
     assert cfg.project.bq_project == "fallback-project"
 
 
@@ -116,6 +115,7 @@ matching_tiers: []
         str(config_file),
         overrides={"project": {"name": "overridden"}},
         skip_env_interpolation=True,
+        validate=False,
     )
     assert cfg.project.name == "overridden"
     assert cfg.project.bq_project == "proj"

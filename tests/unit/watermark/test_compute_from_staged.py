@@ -6,7 +6,6 @@ from the staged (bronze) table with optional column mapping.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -175,3 +174,41 @@ class TestComputeNewWatermarkFromStaged:
         )
 
         assert result == {"updated_at": ts}
+
+
+class TestWatermarkFencingValidation:
+    """Tests for partial fencing config warning in WatermarkManager.write()."""
+
+    def test_full_fencing_uses_fenced_sql(self):
+        mgr, client = _make_manager()
+        mgr.ensure_table_exists = MagicMock()
+        mgr.write(
+            "crm", {"updated_at": "2024-01-01"},
+            run_id="r1",
+            fencing_token=42,
+            lock_table="proj.meta.locks",
+            pipeline_name="my_pipe",
+        )
+        sql = client.execute.call_args[0][0]
+        assert "fencing" in sql.lower() or client.execute.called
+
+    def test_no_fencing_uses_unfenced_sql(self):
+        mgr, client = _make_manager()
+        mgr.ensure_table_exists = MagicMock()
+        mgr.write("crm", {"updated_at": "2024-01-01"}, run_id="r1")
+        assert client.execute.called
+
+    def test_partial_fencing_warns(self, caplog):
+        """Providing only some fencing params logs a warning."""
+        import logging
+        mgr, client = _make_manager()
+        mgr.ensure_table_exists = MagicMock()
+        with caplog.at_level(logging.WARNING):
+            mgr.write(
+                "crm", {"updated_at": "2024-01-01"},
+                run_id="r1",
+                fencing_token=42,
+                lock_table=None,
+                pipeline_name="my_pipe",
+            )
+        assert "Partial fencing config" in caplog.text

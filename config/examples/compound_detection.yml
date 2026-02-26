@@ -179,7 +179,7 @@ matching_tiers:
     # Hard negative: disqualify any pair where either record is compound
     hard_negatives:
       - left: "is_compound_name"
-        method: "equals"
+        method: "exact"
         params: { value: 1 }
         action: "disqualify"
 
@@ -207,7 +207,7 @@ matching_tiers:
     # Soft signal: penalize compound pairs (less certain match)
     soft_signals:
       - left: "is_compound_name"
-        method: "equals"
+        method: "exact"
         params: { value: 1 }
         bonus: -2.0
 
@@ -249,7 +249,7 @@ matching_tiers:
     soft_signals:
       # Strong penalty for compound records in fuzzy tier
       - left: "is_compound_name"
-        method: "equals"
+        method: "exact"
         params: { value: 1 }
         bonus: -3.0
       - left: "phone_clean"

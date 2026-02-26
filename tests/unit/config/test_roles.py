@@ -1,15 +1,14 @@
 """Tests for column role mappings."""
 
 from bq_entity_resolution.config.roles import (
-    ROLE_FEATURES,
-    ROLE_BLOCKING_KEYS,
-    ROLE_COMPARISONS,
-    PERSON_ROLES,
     BUSINESS_ROLES,
-    detect_role,
-    features_for_role,
+    PERSON_ROLES,
+    ROLE_COMPARISONS,
+    ROLE_FEATURES,
     blocking_keys_for_role,
     comparisons_for_role,
+    detect_role,
+    features_for_role,
 )
 
 

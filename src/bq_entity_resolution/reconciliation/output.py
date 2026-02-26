@@ -6,6 +6,8 @@ Canonical record selection strategies and output formatting.
 
 from __future__ import annotations
 
+from bq_entity_resolution.sql.utils import sql_escape
+
 
 def completeness_score_expr(columns: list[str], alias: str = "") -> str:
     """
@@ -42,7 +44,7 @@ def canonical_selection_order(
 
     if method == "source_priority" and source_priority:
         case_parts = ", ".join(
-            f"WHEN source_name = '{src}' THEN {i}"
+            f"WHEN source_name = '{sql_escape(src)}' THEN {i}"
             for i, src in enumerate(source_priority)
         )
         return f"CASE {case_parts} ELSE 999 END ASC, entity_uid ASC"

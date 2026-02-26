@@ -51,6 +51,7 @@ in the comparison stage.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,14 @@ FeatureFunction = Callable[..., str]
 
 FEATURE_FUNCTIONS: dict[str, FeatureFunction] = {}
 
+# Feature functions that require BigQuery JavaScript UDFs.
+# Used by config validation to reject these when allow_udfs=False.
+UDF_FEATURE_FUNCTIONS: frozenset[str] = frozenset({
+    "metaphone",
+})
+
 _plugins_loaded = False
+_lock = threading.Lock()
 
 
 def register(name: str) -> Callable[[FeatureFunction], FeatureFunction]:
@@ -88,7 +96,16 @@ def register(name: str) -> Callable[[FeatureFunction], FeatureFunction]:
     """
 
     def decorator(func: FeatureFunction) -> FeatureFunction:
-        FEATURE_FUNCTIONS[name] = func
+        with _lock:
+            if name in FEATURE_FUNCTIONS:
+                logger.warning(
+                    "Feature function '%s' registered by %s is being "
+                    "overwritten by %s",
+                    name,
+                    getattr(FEATURE_FUNCTIONS[name], "__module__", "?"),
+                    getattr(func, "__module__", "?"),
+                )
+            FEATURE_FUNCTIONS[name] = func
         return func
 
     return decorator
@@ -98,12 +115,13 @@ def load_feature_plugins() -> None:
     """Discover and load feature function plugins from entry_points.
 
     Called automatically on first registry miss during config validation.
-    Safe to call multiple times — only loads once.
+    Safe to call multiple times — only loads once. Thread-safe.
     """
     global _plugins_loaded
-    if _plugins_loaded:
-        return
-    _plugins_loaded = True
+    with _lock:
+        if _plugins_loaded:
+            return
+        _plugins_loaded = True
 
     try:
         from importlib.metadata import entry_points
@@ -127,10 +145,15 @@ def load_feature_plugins() -> None:
 # Import sub-modules to trigger @register decorators
 import bq_entity_resolution.features.address_features  # noqa: E402, F401
 import bq_entity_resolution.features.blocking_keys  # noqa: E402, F401
+import bq_entity_resolution.features.business_features  # noqa: E402, F401
 import bq_entity_resolution.features.contact_features  # noqa: E402, F401
 import bq_entity_resolution.features.date_identity_features  # noqa: E402, F401
+import bq_entity_resolution.features.email_features  # noqa: E402, F401
+import bq_entity_resolution.features.entity_features  # noqa: E402, F401
 import bq_entity_resolution.features.geo_features  # noqa: E402, F401
+import bq_entity_resolution.features.industry_features  # noqa: E402, F401
 import bq_entity_resolution.features.name_features  # noqa: E402, F401
+import bq_entity_resolution.features.negative_features  # noqa: E402, F401
 import bq_entity_resolution.features.phonetic_features  # noqa: E402, F401
 import bq_entity_resolution.features.utility_features  # noqa: E402, F401
 import bq_entity_resolution.features.zip_features  # noqa: E402, F401

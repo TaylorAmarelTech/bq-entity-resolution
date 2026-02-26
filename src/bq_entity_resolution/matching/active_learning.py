@@ -11,15 +11,16 @@ from __future__ import annotations
 import logging
 
 from bq_entity_resolution.config.schema import (
-    ActiveLearningConfig,
     MatchingTierConfig,
     PipelineConfig,
 )
 from bq_entity_resolution.naming import (
-    candidates_table,
-    featured_table,
     labels_table as default_labels_table,
+)
+from bq_entity_resolution.naming import (
     matches_table,
+)
+from bq_entity_resolution.naming import (
     review_queue_table as default_review_queue_table,
 )
 from bq_entity_resolution.sql.builders.active_learning import (
@@ -86,8 +87,10 @@ class ActiveLearningEngine:
             al.label_feedback.feedback_table
             or default_labels_table(self.config)
         )
+        from bq_entity_resolution.sql.utils import sql_escape
+
         return (
             f"SELECT COUNT(*) AS label_count "
             f"FROM `{labels_tbl}` "
-            f"WHERE tier_name = '{tier.name}'"
+            f"WHERE tier_name = '{sql_escape(tier.name)}'"
         )

@@ -71,6 +71,11 @@ class ColumnProfiler:
         Returns one row per column with cardinality, null count, total rows,
         average frequency, and max frequency.
         """
+        from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
+
+        validate_table_ref(table)
+        for col in columns:
+            validate_identifier(col, context="profiling column")
         unions = []
         for col in columns:
             unions.append(
@@ -79,8 +84,10 @@ class ColumnProfiler:
                 f"  COUNT(DISTINCT {col}) AS cardinality,\n"
                 f"  COUNT(*) AS total_rows,\n"
                 f"  COUNTIF({col} IS NULL) AS null_count,\n"
-                f"  SAFE_DIVIDE(COUNT(*), NULLIF(COUNT(DISTINCT {col}), 0)) AS avg_frequency,\n"
-                f"  (SELECT COUNT(*) FROM `{table}` GROUP BY {col} ORDER BY COUNT(*) DESC LIMIT 1) AS max_frequency\n"
+                f"  SAFE_DIVIDE(COUNT(*), NULLIF(COUNT(DISTINCT {col}), 0))"
+                f" AS avg_frequency,\n"
+                f"  (SELECT COUNT(*) FROM `{table}` GROUP BY {col}"
+                f" ORDER BY COUNT(*) DESC LIMIT 1) AS max_frequency\n"
                 f"FROM `{table}`"
             )
         return "\nUNION ALL\n".join(unions)
@@ -89,6 +96,10 @@ class ColumnProfiler:
         self, table: str, column: str, top_k: int = 10
     ) -> str:
         """Generate SQL to get top-K most frequent values for a column."""
+        from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
+
+        validate_table_ref(table)
+        validate_identifier(column, context="profiling column")
         return (
             f"SELECT CAST({column} AS STRING) AS value, COUNT(*) AS freq\n"
             f"FROM `{table}`\n"

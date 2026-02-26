@@ -62,7 +62,7 @@ def test_incremental_cluster_sql_uses_canonical_table():
 
 
 def test_populate_canonical_index_sql():
-    """Populate SQL updates prior cluster_ids and inserts new entities."""
+    """Populate SQL uses atomic MERGE to upsert entities."""
     params = PopulateCanonicalIndexParams(
         canonical_table="proj.gold.canonical_index",
         source_table="proj.silver.featured",
@@ -70,11 +70,15 @@ def test_populate_canonical_index_sql():
     )
     sql = build_populate_canonical_index_sql(params).render()
 
-    # Should UPDATE prior entities' cluster_ids
-    assert "UPDATE" in sql
+    # Should use atomic MERGE statement
+    assert "MERGE INTO" in sql
+    assert "canonical_index" in sql
     assert "cluster_id" in sql
 
+    # Should UPDATE existing entities with changed cluster_id
+    assert "WHEN MATCHED AND" in sql
+    assert "UPDATE SET" in sql
+
     # Should INSERT new entities
-    assert "INSERT INTO" in sql
-    assert "NOT IN" in sql
-    assert "canonical_index" in sql
+    assert "WHEN NOT MATCHED THEN" in sql
+    assert "INSERT ROW" in sql

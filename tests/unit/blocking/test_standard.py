@@ -1,8 +1,8 @@
 """Tests for standard blocking helpers."""
 
 from bq_entity_resolution.blocking.standard import (
-    validate_blocking_path,
     estimate_selectivity,
+    validate_blocking_path,
 )
 
 

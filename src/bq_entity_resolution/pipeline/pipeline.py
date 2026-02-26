@@ -38,10 +38,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from bq_entity_resolution.backends.protocol import Backend
 from bq_entity_resolution.config.schema import PipelineConfig
+from bq_entity_resolution.exceptions import LockFencingError, WatermarkError
 from bq_entity_resolution.monitoring.metrics import MetricsCollector
 from bq_entity_resolution.pipeline.dag import StageDAG, build_pipeline_dag
 from bq_entity_resolution.pipeline.executor import (
@@ -51,7 +53,9 @@ from bq_entity_resolution.pipeline.executor import (
     ProgressCallback,
 )
 from bq_entity_resolution.pipeline.gates import DataQualityGate, default_gates
+from bq_entity_resolution.pipeline.health import HealthProbe
 from bq_entity_resolution.pipeline.plan import PipelinePlan, create_plan
+from bq_entity_resolution.pipeline.shutdown import GracefulShutdown
 from bq_entity_resolution.pipeline.validator import (
     ContractViolation,
     validate_dag_contracts,
@@ -62,6 +66,23 @@ from bq_entity_resolution.stages.base import Stage
 logger = logging.getLogger(__name__)
 
 DagBuilder = Callable[[PipelineConfig], StageDAG]
+
+
+@dataclass(frozen=True)
+class CostEstimate:
+    """Pre-execution cost estimate from BigQuery dry-run API."""
+
+    total_bytes_processed: int = 0
+    per_stage: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def total_gb(self) -> float:
+        return self.total_bytes_processed / (1024 ** 3)
+
+    @property
+    def estimated_cost_usd(self) -> float:
+        """Estimated on-demand cost at $6.25 per TiB processed."""
+        return self.total_bytes_processed / (1024 ** 4) * 6.25
 
 
 class Pipeline:
@@ -98,10 +119,14 @@ class Pipeline:
         if dag_builder:
             self._dag = dag_builder(config)
         else:
+            # Merge YAML-level skip_stages with Python API exclude_stages
+            effective_excludes = set(exclude_stages or set())
+            if config.execution.skip_stages:
+                effective_excludes |= set(config.execution.skip_stages)
             self._dag = build_pipeline_dag(
                 config,
                 stage_overrides=stage_overrides,
-                exclude_stages=exclude_stages,
+                exclude_stages=effective_excludes or None,
             )
         self._gates = (
             quality_gates
@@ -212,6 +237,41 @@ class Pipeline:
         """
         return create_plan(self._dag, **kwargs)
 
+    def estimate_cost(
+        self,
+        backend: Backend,
+        **plan_kwargs: Any,
+    ) -> CostEstimate:
+        """Estimate execution cost via BigQuery dry-run API.
+
+        Generates the full plan and runs each SQL statement in dry-run
+        mode to estimate total bytes processed. No data is read or written.
+
+        Returns a CostEstimate with total bytes, per-stage breakdown,
+        and approximate USD cost. Returns zero estimates for backends
+        that don't support dry-run (e.g. DuckDB).
+
+        Example::
+
+            estimate = pipeline.estimate_cost(backend=my_backend, full_refresh=True)
+            print(f"Estimated cost: ${estimate.estimated_cost_usd:.2f}")
+            print(f"Total bytes: {estimate.total_gb:.1f} GB")
+            if estimate.estimated_cost_usd < 10.0:
+                pipeline.run(backend=my_backend, full_refresh=True)
+        """
+        plan = self.plan(**plan_kwargs)
+        total = 0
+        per_stage: dict[str, int] = {}
+        for stage_plan in plan.stages:
+            stage_bytes = 0
+            for expr in stage_plan.sql_expressions:
+                stage_bytes += backend.estimate_bytes(
+                    expr.render(), label=stage_plan.stage_name
+                )
+            per_stage[stage_plan.stage_name] = stage_bytes
+            total += stage_bytes
+        return CostEstimate(total_bytes_processed=total, per_stage=per_stage)
+
     def execute(
         self,
         plan: PipelinePlan,
@@ -221,6 +281,9 @@ class Pipeline:
         checkpoint_manager: CheckpointManagerProtocol | None = None,
         resume: bool = False,
         on_progress: ProgressCallback | None = None,
+        max_cost_bytes: int | None = None,
+        health_probe: HealthProbe | None = None,
+        fencing_kwargs: dict[str, Any] | None = None,
     ) -> PipelineResult:
         """Execute a pre-generated plan against a backend.
 
@@ -232,12 +295,18 @@ class Pipeline:
             checkpoint_manager: Optional checkpoint manager for crash recovery.
             resume: If True, auto-detect resumable run from checkpoint.
             on_progress: Optional callback for progress reporting.
+            max_cost_bytes: Pipeline-level cost ceiling (total bytes billed).
+            health_probe: Optional health probe for K8s liveness updates.
+            fencing_kwargs: Optional fencing params for checkpoint writes.
         """
         executor = PipelineExecutor(
             backend=backend,
             quality_gates=self._gates,
             checkpoint_manager=checkpoint_manager,
             on_progress=on_progress,
+            max_cost_bytes=max_cost_bytes,
+            health_probe=health_probe,
+            fencing_kwargs=fencing_kwargs,
         )
         return executor.execute(
             plan,
@@ -251,6 +320,7 @@ class Pipeline:
         backend: Backend,
         full_refresh: bool = False,
         drain: bool = False,
+        dry_run: bool = False,
         run_id: str | None = None,
         skip_stages: set[str] | None = None,
         checkpoint_manager: CheckpointManagerProtocol | None = None,
@@ -258,7 +328,7 @@ class Pipeline:
         on_progress: ProgressCallback | None = None,
         watermark_manager: Any | None = None,
         **plan_kwargs: Any,
-    ) -> PipelineResult:
+    ) -> PipelineResult | CostEstimate:
         """Convenience: validate, plan, and execute in one call.
 
         Args:
@@ -267,6 +337,9 @@ class Pipeline:
             drain: If True, auto-loop through batches until all
                 unprocessed records are consumed. Each iteration
                 advances the watermark and processes the next batch.
+            dry_run: If True, estimate cost via BigQuery dry-run API
+                without executing. Returns a CostEstimate instead
+                of PipelineResult.
             run_id: Optional run identifier.
             skip_stages: Stages to skip.
             checkpoint_manager: Optional checkpoint persistence.
@@ -277,10 +350,25 @@ class Pipeline:
                 watermark kwargs are passed through to plan().
             **plan_kwargs: Additional kwargs for plan generation.
         """
+        # --- Production infrastructure setup (early, so probes reflect failures) ---
+        from bq_entity_resolution.config.models.infrastructure import DeploymentConfig
+        deploy = getattr(self._config, "deployment", None) or DeploymentConfig()
+
+        # Health probe (created early so validation failures are visible to K8s)
+        health_probe: HealthProbe | None = None
+        if deploy.health_probe.enabled:
+            health_probe = HealthProbe(
+                path=deploy.health_probe.path,
+                enabled=True,
+            )
+            health_probe.mark_healthy(stage="init", run_id=run_id or "")
+
         # Validate first
         violations = self.validate()
         errors = [v for v in violations if v.severity == "error"]
         if errors:
+            if health_probe:
+                health_probe.mark_unhealthy()
             error_msgs = "; ".join(
                 f"{v.stage_name}: {v.message}" for v in errors
             )
@@ -296,23 +384,152 @@ class Pipeline:
                 w.message,
             )
 
-        # Check drain mode from config if not explicitly passed
-        inc = getattr(self._config, "incremental", None)
-        if not drain and inc and getattr(inc, "drain_mode", False):
-            drain = True
-        max_iterations = getattr(inc, "drain_max_iterations", 100) if inc else 100
+        # Dry-run: estimate cost without executing
+        if dry_run:
+            return self.estimate_cost(
+                backend=backend,
+                full_refresh=full_refresh,
+                **plan_kwargs,
+            )
 
-        # Read initial watermark if manager is provided
+        # Graceful shutdown handler
+        shutdown = GracefulShutdown(enabled=deploy.graceful_shutdown.enabled)
+        if deploy.graceful_shutdown.enabled and hasattr(backend, "bq_client"):
+            shutdown.register_client(backend.bq_client)
+        if health_probe:
+            shutdown.register_health_probe(health_probe)
+
+        # Distributed lock
+        pipeline_lock = None
+        lock_table: str | None = None
+        pipeline_name = getattr(getattr(self._config, "project", None), "name", "default")
+        if deploy.distributed_lock.enabled and hasattr(backend, "bq_client"):
+            from bq_entity_resolution.pipeline.lock import PipelineLock
+            project = self._config.project
+            lock_table = (
+                f"{project.bq_project}."
+                f"{project.watermark_dataset}."
+                f"{deploy.distributed_lock.lock_table}"
+            )
+            pipeline_lock = PipelineLock(
+                bq_client=backend.bq_client,
+                lock_table=lock_table,
+                ttl_minutes=deploy.distributed_lock.ttl_minutes,
+                retry_seconds=deploy.distributed_lock.retry_seconds,
+                max_wait_seconds=deploy.distributed_lock.max_wait_seconds,
+            )
+            shutdown.register_lock(pipeline_lock, pipeline_name)
+
+        # Cost ceiling from config (opt-in, None by default)
+        execution = getattr(self._config, "execution", None)
+        max_cost_bytes = getattr(execution, "max_cost_bytes", None) if execution else None
+
+        # Install shutdown handlers
+        shutdown.install()
+
+        pipeline_ran = False
+        try:
+            # Acquire distributed lock if configured
+            if pipeline_lock:
+                pipeline_lock.acquire(pipeline_name)
+
+            result = self._run_loop(
+                backend=backend,
+                full_refresh=full_refresh,
+                drain=drain,
+                run_id=run_id,
+                skip_stages=skip_stages,
+                checkpoint_manager=checkpoint_manager,
+                resume=resume,
+                on_progress=on_progress,
+                watermark_manager=watermark_manager,
+                health_probe=health_probe,
+                max_cost_bytes=max_cost_bytes,
+                pipeline_lock=pipeline_lock,
+                lock_table=lock_table,
+                pipeline_name=pipeline_name,
+                **plan_kwargs,
+            )
+            pipeline_ran = True
+        finally:
+            # Release lock
+            if pipeline_lock:
+                try:
+                    pipeline_lock.release(pipeline_name)
+                except Exception:
+                    logger.error(
+                        "Failed to release pipeline lock for '%s'. "
+                        "Lock will expire after TTL, but concurrent runs "
+                        "may be blocked until then.",
+                        pipeline_name, exc_info=True,
+                    )
+
+            # Uninstall shutdown handlers
+            shutdown.uninstall()
+
+            # Health probe: mark success if pipeline ran, else signal unhealthy
+            if health_probe:
+                if pipeline_ran:
+                    health_probe.mark_healthy(stage="complete", run_id=run_id or "")
+                else:
+                    health_probe.mark_unhealthy()
+
+        return result
+
+    def _run_loop(
+        self,
+        backend: Backend,
+        full_refresh: bool,
+        drain: bool,
+        run_id: str | None,
+        skip_stages: set[str] | None,
+        checkpoint_manager: CheckpointManagerProtocol | None,
+        resume: bool,
+        on_progress: ProgressCallback | None,
+        watermark_manager: Any | None,
+        health_probe: HealthProbe | None,
+        max_cost_bytes: int | None,
+        pipeline_lock: Any | None,
+        lock_table: str | None = None,
+        pipeline_name: str | None = None,
+        **plan_kwargs: Any,
+    ) -> PipelineResult:
+        """Core execution loop, separated from infrastructure setup."""
+        # Build fencing kwargs for checkpoint writes
+        fencing_kwargs: dict[str, Any] = {}
+        if (
+            pipeline_lock
+            and pipeline_lock.fencing_token is not None
+            and lock_table
+            and pipeline_name
+        ):
+            fencing_kwargs = {
+                "fencing_token": pipeline_lock.fencing_token,
+                "lock_table": lock_table,
+                "pipeline_name": pipeline_name,
+            }
+
+        # Check drain mode from config if not explicitly passed
+        inc = self._config.incremental
+        if not drain and inc and inc.drain_mode:
+            drain = True
+        max_iterations = inc.drain_max_iterations if inc else 100
+
+        # Read initial watermarks if manager is provided (per-source)
         watermark = plan_kwargs.pop("watermark", None)
+        watermarks: dict[str, dict] = {}
         if watermark_manager and not full_refresh and not watermark:
             for source in self._config.sources:
                 wm = watermark_manager.read(source.name)
                 if wm:
-                    watermark = wm
-                    break
+                    watermarks[source.name] = wm
+            # Use first source's watermark for backward compatibility
+            if watermarks:
+                watermark = next(iter(watermarks.values()))
 
         iteration = 0
         result: PipelineResult | None = None
+        consecutive_empty = 0
 
         while True:
             # Plan
@@ -337,42 +554,110 @@ class Pipeline:
                 checkpoint_manager=checkpoint_manager,
                 resume=resume if iteration == 0 else False,
                 on_progress=on_progress,
+                max_cost_bytes=max_cost_bytes,
+                health_probe=health_probe,
+                fencing_kwargs=fencing_kwargs or None,
             )
 
-            # Record metrics (safe: configs may not have monitoring section)
+            # Record metrics if monitoring is configured
             try:
-                monitoring = getattr(self._config, "monitoring", None)
-                metrics_cfg = getattr(monitoring, "metrics", None) if monitoring else None
-                if metrics_cfg and getattr(metrics_cfg, "enabled", False):
+                monitoring = self._config.monitoring
+                metrics_cfg = monitoring.metrics if monitoring else None
+                if metrics_cfg and metrics_cfg.enabled:
                     collector = MetricsCollector(self._config)
                     collector.set_backend(backend)
                     collector.record_run(result)
             except Exception:
                 logger.warning("Failed to record metrics", exc_info=True)
 
-            # Advance watermark after successful execution
-            if watermark_manager and not full_refresh and result.success:
-                cursor_columns = getattr(inc, "cursor_columns", ["updated_at"]) if inc else ["updated_at"]
+            # Refresh distributed lock heartbeat after each iteration.
+            # Failure to refresh means the lock may expire and another pod
+            # could acquire it — abort to prevent concurrent execution.
+            if pipeline_lock:
                 try:
-                    from bq_entity_resolution.naming import staged_table
-                    staged = staged_table(self._config, self._config.sources[0].name)
-                    new_wm = watermark_manager.compute_new_watermark_from_staged(
-                        staged_table=staged,
-                        cursor_columns=cursor_columns,
-                        column_mapping={"updated_at": "source_updated_at"},
-                    )
-                    if new_wm:
-                        watermark_manager.write(
-                            self._config.sources[0].name,
-                            new_wm,
-                            run_id=run_id or "",
-                        )
-                        watermark = new_wm
-                        logger.info(
-                            "Watermark advanced: %s", new_wm
-                        )
+                    pipeline_lock.refresh(self._config.project.name)
                 except Exception:
-                    logger.warning("Failed to advance watermark", exc_info=True)
+                    logger.error(
+                        "Failed to refresh pipeline lock — aborting to prevent "
+                        "concurrent execution. Lock may have expired.",
+                        exc_info=True,
+                    )
+                    raise RuntimeError(
+                        "Pipeline lock refresh failed. Aborting to prevent "
+                        "concurrent runs. Check BigQuery connectivity and "
+                        "lock table permissions."
+                    )
+
+            # Advance watermark after successful execution (all sources)
+            batch_had_rows = False
+            if watermark_manager and not full_refresh and result.success:
+                cursor_cols = inc.cursor_columns if inc else ["updated_at"]
+                for source in self._config.sources:
+                    try:
+                        from bq_entity_resolution.naming import staged_table
+                        staged = staged_table(self._config, source.name)
+                        new_wm = watermark_manager.compute_new_watermark_from_staged(
+                            staged_table=staged,
+                            cursor_columns=cursor_cols,
+                            column_mapping={"updated_at": "source_updated_at"},
+                        )
+                        if new_wm:
+                            batch_had_rows = True
+                            # Wire fencing token for lock-protected writes
+                            wm_kwargs: dict[str, Any] = {
+                                "run_id": run_id or "",
+                            }
+                            if (
+                                pipeline_lock
+                                and pipeline_lock.fencing_token is not None
+                                and lock_table
+                                and pipeline_name
+                            ):
+                                wm_kwargs["fencing_token"] = pipeline_lock.fencing_token
+                                wm_kwargs["lock_table"] = lock_table
+                                wm_kwargs["pipeline_name"] = pipeline_name
+                            watermark_manager.write(
+                                source.name,
+                                new_wm,
+                                **wm_kwargs,
+                            )
+                            watermarks[source.name] = new_wm
+                            logger.info(
+                                "Watermark advanced for '%s': %s",
+                                source.name, new_wm,
+                            )
+                    except (WatermarkError, LockFencingError):
+                        raise  # Watermark/fencing failures are critical — propagate
+                    except Exception:
+                        if drain:
+                            # In drain mode, non-transient errors must propagate
+                            # to prevent infinite loops re-processing same batch
+                            logger.error(
+                                "Failed to advance watermark for '%s' in drain "
+                                "mode — aborting to prevent infinite loop",
+                                source.name, exc_info=True,
+                            )
+                            raise
+                        logger.error(
+                            "Failed to advance watermark for '%s'. "
+                            "Next run will reprocess this batch.",
+                            source.name, exc_info=True,
+                        )
+                # Update watermark for plan generation
+                if watermarks:
+                    watermark = next(iter(watermarks.values()))
+
+            # Track consecutive empty batches in drain mode
+            if drain:
+                if not batch_had_rows:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 2:
+                        logger.info(
+                            "Two consecutive empty batches in drain mode — stopping"
+                        )
+                        break
+                else:
+                    consecutive_empty = 0
 
             # Drain mode: continue if there might be more records
             if not drain:
@@ -386,25 +671,39 @@ class Pipeline:
                 )
                 break
 
-            # Check if there are more records to process
-            if watermark_manager and watermark:
-                cursor_columns = getattr(inc, "cursor_columns", ["updated_at"]) if inc else ["updated_at"]
-                try:
-                    has_more = watermark_manager.has_unprocessed_records(
-                        source_table=self._config.sources[0].table,
-                        cursor_columns=cursor_columns,
-                        current_watermark=watermark,
-                    )
-                    if not has_more:
-                        logger.info(
-                            "Drain mode: no more unprocessed records after "
-                            "%d iterations", iteration
+            # Check if there are more records to process (any source)
+            if watermark_manager and watermarks:
+                cursor_cols = inc.cursor_columns if inc else ["updated_at"]
+                has_any_more = False
+                for source in self._config.sources:
+                    src_wm = watermarks.get(source.name)
+                    if not src_wm:
+                        continue
+                    try:
+                        has_more = watermark_manager.has_unprocessed_records(
+                            source_table=source.table,
+                            cursor_columns=cursor_cols,
+                            current_watermark=src_wm,
+                            cursor_mode=inc.cursor_mode if inc else "ordered",
+                            grace_period_hours=inc.grace_period_hours if inc else 0,
                         )
+                        if has_more:
+                            has_any_more = True
+                            break
+                    except Exception:
+                        # In drain mode, treat check failure as "has more"
+                        # to avoid silently missing records
+                        logger.warning(
+                            "Failed to check unprocessed records for '%s'; "
+                            "assuming more records exist",
+                            source.name, exc_info=True,
+                        )
+                        has_any_more = True
                         break
-                except Exception:
-                    logger.warning(
-                        "Failed to check for unprocessed records, stopping drain",
-                        exc_info=True,
+                if not has_any_more:
+                    logger.info(
+                        "Drain mode: no more unprocessed records after "
+                        "%d iterations", iteration
                     )
                     break
             else:
@@ -414,7 +713,11 @@ class Pipeline:
                 )
                 break
 
-        assert result is not None
+        if result is None:
+            raise RuntimeError(
+                "Pipeline.run() completed without producing a result. "
+                "This indicates a bug in the execution loop."
+            )
         return result
 
     @classmethod

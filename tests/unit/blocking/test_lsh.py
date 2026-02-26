@@ -1,11 +1,10 @@
 """Tests for LSH blocking utilities."""
 
-import math
 
 from bq_entity_resolution.blocking.lsh import (
-    lsh_bucket_columns,
-    lsh_blocking_condition,
     estimate_collision_probability,
+    lsh_blocking_condition,
+    lsh_bucket_columns,
 )
 
 

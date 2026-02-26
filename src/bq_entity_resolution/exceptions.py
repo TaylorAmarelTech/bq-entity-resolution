@@ -48,3 +48,7 @@ class ParameterEstimationError(EntityResolutionError):
 
 class PipelineAbortError(EntityResolutionError):
     """Pipeline aborted (manual or safety limit)."""
+
+
+class LockFencingError(EntityResolutionError):
+    """Fencing token mismatch — lock was stolen by another holder."""

@@ -70,7 +70,6 @@ def sorted_name_fingerprint(inputs: list[str], **_: Any) -> str:
     then FARM_FINGERPRINT produces the same INT64. This enables
     transposition-resistant blocking with fast INT64 equi-joins.
     """
-    col = inputs[0]
     sorted_expr = sorted_name_tokens(inputs)
     return f"FARM_FINGERPRINT({sorted_expr})"
 

@@ -9,7 +9,7 @@ The plan phase generates all SQL without executing it. This enables:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import TableRef
@@ -114,30 +114,40 @@ def create_plan(dag: StageDAG, **plan_kwargs: Any) -> PipelinePlan:
     """
     stage_plans = []
 
-    # Detect which blocking stages need excluded_pairs_table.
-    # A blocking stage needs exclusion if it depends (directly or
-    # transitively) on an accumulation stage.
-    accumulation_seen = False
+    # Build the set of tiers that need cross-tier exclusion.
+    # A blocking stage needs exclusion if its tier is NOT the first
+    # (i.e., there are prior tiers whose matches should be excluded).
+    # Extract tier names from blocking stage names (blocking_{tier_name}).
+    tier_names_ordered: list[str] = []
+    for stage in dag.stages:
+        if stage.name.startswith("blocking_"):
+            tier_name = stage.name[len("blocking_"):]
+            if tier_name not in tier_names_ordered:
+                tier_names_ordered.append(tier_name)
+
+    tiers_with_exclusion: set[str] = set()
+    for i, name in enumerate(tier_names_ordered):
+        if i > 0:  # Not first tier — should exclude prior matches
+            tiers_with_exclusion.add(name)
 
     for stage in dag.stages:
         stage_kwargs = dict(plan_kwargs)
 
         # Inject excluded_pairs_table for blocking stages after the first tier.
-        # Convention: accumulation stages are named "accumulate_{tier}".
-        if stage.name.startswith("accumulate_"):
-            accumulation_seen = True
-        elif stage.name.startswith("blocking_") and accumulation_seen:
-            # This blocking stage is for a tier after the first --
-            # inject the all_matches_table for prior-tier exclusion.
-            if "excluded_pairs_table" not in stage_kwargs:
-                from bq_entity_resolution.stages.blocking import BlockingStage
+        if stage.name.startswith("blocking_"):
+            tier_name = stage.name[len("blocking_"):]
+            if tier_name in tiers_with_exclusion:
+                # This blocking stage is for a tier after the first --
+                # inject the all_matches_table for prior-tier exclusion.
+                if "excluded_pairs_table" not in stage_kwargs:
+                    from bq_entity_resolution.stages.blocking import BlockingStage
 
-                if isinstance(stage, BlockingStage):
-                    from bq_entity_resolution.naming import all_matches_table
+                    if isinstance(stage, BlockingStage):
+                        from bq_entity_resolution.naming import all_matches_table
 
-                    stage_kwargs["excluded_pairs_table"] = all_matches_table(
-                        stage._config
-                    )
+                        stage_kwargs["excluded_pairs_table"] = all_matches_table(
+                            stage._config
+                        )
 
         exprs = stage.plan(**stage_kwargs)
 

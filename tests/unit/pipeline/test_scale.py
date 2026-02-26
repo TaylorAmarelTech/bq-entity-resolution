@@ -1,13 +1,10 @@
 """Tests for scale optimizations."""
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from bq_entity_resolution.clients.bigquery import BigQueryClient
 from bq_entity_resolution.config.schema import ScaleConfig
 from bq_entity_resolution.pipeline.context import PipelineContext
-
 
 # ---------------------------------------------------------------
 # Config model tests
@@ -71,7 +68,7 @@ def test_context_has_completed_stages():
     """PipelineContext includes completed_stages set."""
     ctx = PipelineContext(
         run_id="test",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
         config=None,  # type: ignore
     )
     assert isinstance(ctx.completed_stages, set)
@@ -82,7 +79,7 @@ def test_context_completed_stages_tracking():
     """completed_stages tracks which stages are done."""
     ctx = PipelineContext(
         run_id="test",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
         config=None,  # type: ignore
     )
     ctx.completed_stages.add("staging")

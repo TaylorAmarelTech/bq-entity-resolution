@@ -1,7 +1,7 @@
 """Tests for the Stage base class and supporting types."""
 
-from bq_entity_resolution.stages.base import Stage, TableRef, StageResult
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.stages.base import Stage, StageResult, TableRef
 
 
 def test_table_ref_creation():

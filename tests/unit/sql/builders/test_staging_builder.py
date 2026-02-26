@@ -1,8 +1,8 @@
 """Tests for the staging SQL builder."""
 
 from bq_entity_resolution.sql.builders.staging import (
-    StagingParams,
     JoinDef,
+    StagingParams,
     build_staging_sql,
 )
 
@@ -185,9 +185,9 @@ def test_staging_sql_escape_source_name():
 def test_staging_returns_sql_expression():
     """Builder returns SQLExpression, not raw string."""
     params = StagingParams(
-        target_table="t",
+        target_table="p.d.target",
         source_name="s",
-        source_table="st",
+        source_table="p.d.source",
         unique_key="id",
         updated_at="u",
     )

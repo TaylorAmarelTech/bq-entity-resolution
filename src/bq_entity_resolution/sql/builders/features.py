@@ -14,15 +14,16 @@ from dataclasses import dataclass, field
 
 from bq_entity_resolution.columns import (
     ENTITY_UID,
+    PIPELINE_LOADED_AT,
     SOURCE_NAME,
     SOURCE_UPDATED_AT,
-    PIPELINE_LOADED_AT,
     TERM_FREQUENCY_COLUMN,
-    TERM_FREQUENCY_VALUE,
     TERM_FREQUENCY_COUNT,
     TERM_FREQUENCY_RATIO,
+    TERM_FREQUENCY_VALUE,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,9 @@ class FeatureExpr:
     name: str
     expression: str
 
+    def __post_init__(self) -> None:
+        validate_identifier(self.name, "feature expression name")
+
 
 @dataclass(frozen=True)
 class CustomJoin:
@@ -38,6 +42,10 @@ class CustomJoin:
     table: str
     alias: str
     on: str
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.table)
+        validate_identifier(self.alias, "custom join alias")
 
 
 @dataclass(frozen=True)
@@ -62,11 +70,29 @@ class EnrichmentJoin:
     match_flag: str = ""        # If set, auto-generates a 0/1 INT64 flag column
     join_type: str = "LEFT"     # LEFT (default) or INNER
 
+    def __post_init__(self) -> None:
+        validate_table_ref(self.table)
+        validate_identifier(self.alias, "enrichment join alias")
+        validate_identifier(self.lookup_key, "enrichment lookup key")
+        for col in self.columns:
+            validate_identifier(col, "enrichment column")
+        if self.column_prefix:
+            validate_identifier(self.column_prefix, "enrichment column prefix")
+        if self.match_flag:
+            validate_identifier(self.match_flag, "enrichment match flag")
+        if self.join_type not in ("LEFT", "INNER"):
+            raise ValueError(
+                f"Invalid join_type: {self.join_type!r}. Must be 'LEFT' or 'INNER'."
+            )
+
 
 @dataclass(frozen=True)
 class TFColumn:
     """A column to compute term frequencies for."""
     column_name: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.column_name, "term frequency column")
 
 
 @dataclass(frozen=True)
@@ -83,6 +109,11 @@ class FeatureParams:
     custom_joins: list[CustomJoin] = field(default_factory=list)
     enrichment_joins: list[EnrichmentJoin] = field(default_factory=list)
     cluster_by: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.target_table)
+        for t in self.source_tables:
+            validate_table_ref(t)
 
 
 def build_features_sql(params: FeatureParams) -> SQLExpression:

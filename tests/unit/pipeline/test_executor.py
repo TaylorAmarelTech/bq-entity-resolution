@@ -1,11 +1,10 @@
 """Tests for the pipeline executor."""
 
+from datetime import UTC
+
 import pytest
 
 from bq_entity_resolution.backends.protocol import QueryResult
-from bq_entity_resolution.sql.expression import SQLExpression
-from bq_entity_resolution.stages.base import TableRef
-from bq_entity_resolution.pipeline.plan import StagePlan, PipelinePlan
 from bq_entity_resolution.pipeline.executor import (
     PipelineExecutor,
     PipelineResult,
@@ -15,7 +14,8 @@ from bq_entity_resolution.pipeline.gates import (
     DataQualityGate,
     GateResult,
 )
-
+from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
+from bq_entity_resolution.sql.expression import SQLExpression
 
 # -- Mock backend --
 
@@ -91,7 +91,7 @@ class TestPipelineExecutor:
         assert len(backend.executed) == 3
 
     def test_execute_records_sql_log(self):
-        """Executor records SQL in the result log."""
+        """Executor records SQL in the result log (always redacted)."""
         backend = MockBackend()
         executor = PipelineExecutor(backend)
         plan = _make_plan(["staging"])
@@ -100,7 +100,21 @@ class TestPipelineExecutor:
 
         assert len(result.sql_log) == 1
         assert result.sql_log[0]["stage"] == "staging"
-        assert "staging" in result.sql_log[0]["sql"]
+        # SQL is always redacted; string literals are replaced
+        assert "sql" in result.sql_log[0]
+        assert "timestamp" in result.sql_log[0]
+
+    def test_sql_log_redaction(self):
+        """SQL log redacts string literals by default."""
+        backend = MockBackend()
+        executor = PipelineExecutor(backend)
+        plan = _make_plan(["staging"])
+
+        result = executor.execute(plan, run_id="test_run")
+
+        assert len(result.sql_log) == 1
+        assert "<REDACTED>" in result.sql_log[0]["sql"]
+        assert "staging_0" not in result.sql_log[0]["sql"]
 
     def test_skip_stages(self):
         """Executor skips specified stages."""
@@ -262,9 +276,9 @@ class TestPipelineResult:
         assert result.completed_stages == []
 
     def test_duration(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta
 
-        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        start = datetime(2024, 1, 1, tzinfo=UTC)
         end = start + timedelta(seconds=42)
         result = PipelineResult(
             run_id="test", started_at=start, finished_at=end

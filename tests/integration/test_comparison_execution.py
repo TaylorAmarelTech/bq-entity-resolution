@@ -62,10 +62,35 @@ _COMPARISON_TEST_ARGS = {
     "token_set_score": ("address", "address", {}),
     "initials_match": ("initials", "initials", {}),
     "abbreviation_match": ("first_name", "first_name", {}),
-    "geo_within_km": ("latitude", "latitude", {"max_km": 100, "left_lon": "longitude", "right_lon": "longitude"}),
-    "geo_distance_score": ("latitude", "latitude", {"left_lon": "longitude", "right_lon": "longitude"}),
+    "geo_within_km": (
+        "latitude", "latitude",
+        {"max_km": 100, "left_lon": "longitude", "right_lon": "longitude"},
+    ),
+    "geo_distance_score": (
+        "latitude", "latitude",
+        {"left_lon": "longitude", "right_lon": "longitude"},
+    ),
     "metaphone_match": ("first_name", "first_name", {}),
     "double_metaphone_match": ("first_name", "first_name", {}),
+    # Numeric comparisons (need numeric columns)
+    "numeric_ratio": ("latitude", "latitude", {"min_ratio": 0.9}),
+    "numeric_ratio_score": ("latitude", "latitude", {}),
+    "numeric_percent_diff": ("latitude", "latitude", {"tolerance": 5.0}),
+    # Date comparisons
+    "date_within_months": ("dob", "dob", {"months": 6}),
+    "date_within_years": ("dob", "dob", {"years": 1}),
+    "age_difference": ("dob", "dob", {"max_diff": 5}),
+    "date_overlap": ("dob", "dob", {"left_end": "dob", "right_end": "dob"}),
+    "date_overlap_score": ("dob", "dob", {"left_end": "dob", "right_end": "dob"}),
+    # Vector distances (need embedding columns)
+    "euclidean_distance": ("embedding", "embedding", {"max_distance": 2.0}),
+    "euclidean_distance_score": ("embedding", "embedding", {}),
+    "manhattan_distance": ("embedding", "embedding", {"max_distance": 2.0}),
+    "manhattan_distance_score": ("embedding", "embedding", {}),
+    # String comparisons
+    "jaccard_ngram": ("first_name", "first_name", {"min_similarity": 0.3}),
+    "jaccard_ngram_score": ("first_name", "first_name", {}),
+    "regex_match": ("first_name", "first_name", {"pattern": "^[A-Z]"}),
 }
 
 # Functions requiring geo data — may not work without spatial extension

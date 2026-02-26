@@ -65,6 +65,8 @@ ENTITY_UID = "entity_uid"
 # INT64 — initialized from entity_uid, propagated via MIN() in clustering loop.
 # All clustering JOINs and aggregations operate on this INT64 column.
 CLUSTER_ID = "cluster_id"
+# INT64 — equal to cluster_id. Kept as INT64 for efficient JOINs; format as
+# string with a prefix (e.g. "ENT_" || CAST(...)) only at presentation/export time.
 RESOLVED_ENTITY_ID = "resolved_entity_id"
 CANONICAL_ENTITY_UID = "canonical_entity_uid"
 IS_CANONICAL = "is_canonical"
@@ -104,6 +106,9 @@ MATCH_TIER_PRIORITY = "match_tier_priority"
 MATCH_DETAIL = "match_detail"
 MATCHED_AT = "matched_at"
 MATCH_UNCERTAINTY = "match_uncertainty"
+MATCH_BAND = "match_band"
+IS_AUTO_MATCH = "is_auto_match"
+IS_HUB_NODE = "is_hub_node"
 
 # ---------------------------------------------------------------------------
 # Gold Output

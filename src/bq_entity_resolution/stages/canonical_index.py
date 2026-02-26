@@ -6,13 +6,16 @@ their cluster_ids, enabling cross-batch blocking and incremental clustering.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.naming import (
     canonical_index_table,
-    cluster_table as _cluster_table,
     featured_table,
+)
+from bq_entity_resolution.naming import (
+    cluster_table as _cluster_table,
 )
 from bq_entity_resolution.sql.builders.clustering import (
     CanonicalIndexInitParams,
@@ -22,6 +25,8 @@ from bq_entity_resolution.sql.builders.clustering import (
 )
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class CanonicalIndexInitStage(Stage):
@@ -60,11 +65,15 @@ class CanonicalIndexInitStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate CREATE TABLE IF NOT EXISTS SQL."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         scale = getattr(self._config, "scale", None)
         params = CanonicalIndexInitParams(
             canonical_table=self.outputs["canonical_index"].fq_name,
             source_table=self.inputs["featured"].fq_name,
-            cluster_by=getattr(scale, "canonical_index_clustering", ["entity_uid"]) if scale else ["entity_uid"],
+            cluster_by=(
+                getattr(scale, "canonical_index_clustering", ["entity_uid"])
+                if scale else ["entity_uid"]
+            ),
             partition_by=getattr(scale, "canonical_index_partition_by", None) if scale else None,
         )
         return [build_canonical_index_init_sql(params)]
@@ -109,6 +118,7 @@ class CanonicalIndexPopulateStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate canonical index upsert SQL."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         params = PopulateCanonicalIndexParams(
             canonical_table=canonical_index_table(self._config),
             source_table=self.inputs["featured"].fq_name,

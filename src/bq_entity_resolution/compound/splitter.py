@@ -41,7 +41,6 @@ class CompoundSplitter:
             A complete CTE SQL string (without the WITH keyword).
         """
         name = self.name_col
-        last_name = self.last_name_col
         uid = self.uid_col
 
         return f"""compound_split AS (

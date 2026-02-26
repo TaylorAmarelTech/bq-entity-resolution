@@ -2,11 +2,10 @@
 
 import pytest
 
+from bq_entity_resolution.pipeline.dag import StageDAG
+from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan, create_plan
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
-from bq_entity_resolution.pipeline.plan import StagePlan, PipelinePlan, create_plan
-from bq_entity_resolution.pipeline.dag import StageDAG
-
 
 # -- Dummy stage --
 

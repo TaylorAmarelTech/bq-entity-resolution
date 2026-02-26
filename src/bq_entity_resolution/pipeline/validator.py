@@ -9,8 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from bq_entity_resolution.stages.base import TableRef
-
 if TYPE_CHECKING:
     from bq_entity_resolution.pipeline.dag import StageDAG
 

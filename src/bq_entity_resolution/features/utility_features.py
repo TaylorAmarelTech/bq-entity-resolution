@@ -82,3 +82,85 @@ def soundex(inputs: list[str], **_: Any) -> str:
     As a comparison feature this is fine as-is.
     """
     return f"SOUNDEX({inputs[0]})"
+
+
+@register("remove_diacritics")
+def remove_diacritics(inputs: list[str], **_: Any) -> str:
+    """Remove diacritical marks / accents from text.
+
+    Converts: Å→A, ñ→N, é→E, ü→U, ø→O, ç→C, etc.
+    Uses NORMALIZE(NFD) + REGEXP_REPLACE to strip combining marks,
+    then applies manual replacements for special characters.
+
+    OUTPUT TYPE: STRING
+    When to use: International name matching where accented characters
+    should match their unaccented equivalents.
+    """
+    col = inputs[0]
+    return (
+        f"UPPER(REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE("
+        f"REGEXP_REPLACE(UPPER({col}), "
+        f"r'[ÀÁÂÃÄÅ]', 'A'), "
+        f"r'[ÈÉÊË]', 'E'), "
+        f"r'[ÌÍÎÏ]', 'I'), "
+        f"r'[ÒÓÔÕÖØ]', 'O'), "
+        f"r'[ÙÚÛÜ]', 'U'), "
+        f"r'[ÝŸ]', 'Y'), "
+        f"r'[Ñ]', 'N'), "
+        f"r'[Ç]', 'C'), "
+        f"r'[ÐÞßÆ]', ''))"
+    )
+
+
+@register("length_bucket")
+def length_bucket(inputs: list[str], bucket_size: int = 5, **_: Any) -> str:
+    """Bucket string length into ranges for blocking.
+
+    Groups strings by length: 0-4, 5-9, 10-14, etc. (with bucket_size=5).
+    Names of very different lengths rarely match, so blocking by length
+    bucket eliminates impossible pairs cheaply.
+
+    Use as a blocking key alongside phonetic/fingerprint keys for
+    tighter candidate pair generation.
+    """
+    col = inputs[0]
+    return (
+        f"CASE WHEN {col} IS NOT NULL "
+        f"THEN CAST(FLOOR(CHAR_LENGTH({col}) / {bucket_size}) * {bucket_size} AS INT64) "
+        f"ELSE NULL END"
+    )
+
+
+@register("length_category")
+def length_category(inputs: list[str], **_: Any) -> str:
+    """Categorize string length as short/medium/long for blocking.
+
+    short: 1-4 chars, medium: 5-12 chars, long: 13+ chars.
+    Useful as a blocking key when you want coarse length-based filtering.
+    """
+    col = inputs[0]
+    return (
+        f"CASE "
+        f"WHEN {col} IS NULL THEN NULL "
+        f"WHEN CHAR_LENGTH({col}) <= 4 THEN 'S' "
+        f"WHEN CHAR_LENGTH({col}) <= 12 THEN 'M' "
+        f"ELSE 'L' END"
+    )
+
+
+@register("normalize_whitespace")
+def normalize_whitespace(inputs: list[str], **_: Any) -> str:
+    """Collapse multiple whitespace chars to single space and trim.
+
+    OUTPUT TYPE: STRING
+    When to use: Cleaning free-text fields with inconsistent spacing.
+    """
+    col = inputs[0]
+    return f"TRIM(REGEXP_REPLACE({col}, r'\\s+', ' '))"

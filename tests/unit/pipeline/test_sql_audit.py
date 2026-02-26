@@ -1,5 +1,7 @@
 """Tests for SQL audit trail persistence."""
 
+from datetime import UTC
+
 from bq_entity_resolution.config.schema import (
     BlockingKeyDef,
     BlockingPathDef,
@@ -30,7 +32,12 @@ def _minimal_config(**overrides):
             ),
         ],
         feature_engineering=FeatureEngineeringConfig(
-            blocking_keys=[BlockingKeyDef(name="bk1", function="farm_fingerprint", inputs=["name"])],
+            blocking_keys=[
+                BlockingKeyDef(
+                    name="bk1", function="farm_fingerprint",
+                    inputs=["name"],
+                ),
+            ],
         ),
         matching_tiers=[
             MatchingTierConfig(
@@ -89,11 +96,11 @@ def test_sql_audit_inserts_rows():
 
 def test_sql_log_entry_structure():
     """PipelineContext.log_sql creates entries with stage, step, sql, timestamp."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     config = _minimal_config()
     ctx = PipelineContext(
         run_id="test_run",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
         config=config,
     )
     ctx.log_sql("blocking", "tier1", "SELECT * FROM candidates")

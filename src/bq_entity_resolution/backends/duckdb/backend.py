@@ -13,11 +13,6 @@ import time
 
 import duckdb
 
-from bq_entity_resolution.backends.protocol import (
-    ColumnDef,
-    QueryResult,
-    TableSchema,
-)
 from bq_entity_resolution.backends.duckdb.scripting import (
     execute_bq_scripting,
     is_bq_scripting,
@@ -25,6 +20,11 @@ from bq_entity_resolution.backends.duckdb.scripting import (
 )
 from bq_entity_resolution.backends.duckdb.shims import register_bq_shims
 from bq_entity_resolution.backends.duckdb.sql_adapter import adapt_sql
+from bq_entity_resolution.backends.protocol import (
+    ColumnDef,
+    QueryResult,
+    TableSchema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,23 @@ class DuckDBBackend:
     def __init__(self, database: str = ":memory:"):
         self._conn = duckdb.connect(database)
         self._has_spatial = register_bq_shims(self._conn)
+
+    def _check_open(self) -> None:
+        """Raise RuntimeError if the backend has been closed."""
+        if self._conn is None:
+            raise RuntimeError("DuckDBBackend is closed. Cannot execute operations.")
+
+    def close(self) -> None:
+        """Close the DuckDB connection and release resources."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self) -> DuckDBBackend:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     @property
     def dialect(self) -> str:
@@ -103,6 +120,7 @@ class DuckDBBackend:
         return substitute_vars(sql, variables)
 
     def execute(self, sql: str, label: str = "") -> QueryResult:
+        self._check_open()
         sql = adapt_sql(sql)
         start = time.monotonic()
         try:
@@ -121,11 +139,14 @@ class DuckDBBackend:
                 duration_seconds=duration,
             )
         except Exception as e:
+            from bq_entity_resolution.pipeline.executor import _redact_sql
+
             logger.error("DuckDB execution error (label=%s): %s", label, e)
-            logger.error("SQL:\n%s", sql[:500])
+            logger.error("SQL:\n%s", _redact_sql(sql[:500]))
             raise
 
     def execute_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+        self._check_open()
         sql = adapt_sql(sql)
         result = self._conn.execute(sql)
         if result.description is None:
@@ -140,6 +161,7 @@ class DuckDBBackend:
         it in Python. Otherwise splits on semicolons and executes
         each statement sequentially.
         """
+        self._check_open()
         sql = adapt_sql(sql)
         start = time.monotonic()
 
@@ -157,7 +179,7 @@ class DuckDBBackend:
                     try:
                         total_rows += len(result.fetchall())
                     except duckdb.InvalidInputException:
-                        pass
+                        pass  # Statement returned no fetchable result (e.g. DDL/DML)
 
         return QueryResult(
             job_id=f"duckdb_script_{label}",
@@ -166,6 +188,7 @@ class DuckDBBackend:
         )
 
     def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+        self._check_open()
         sql = adapt_sql(sql)
         statements = split_statements(sql)
         last_result: list[dict] = []
@@ -180,7 +203,11 @@ class DuckDBBackend:
         return last_result
 
     def table_exists(self, table_ref: str) -> bool:
+        self._check_open()
+        from bq_entity_resolution.sql.utils import validate_identifier
+
         table_name = _local_table_name(table_ref)
+        validate_identifier(table_name, context="table name")
         try:
             self._conn.execute(f"SELECT 1 FROM {table_name} LIMIT 0")
             return True
@@ -188,7 +215,11 @@ class DuckDBBackend:
             return False
 
     def get_table_schema(self, table_ref: str) -> TableSchema:
+        self._check_open()
+        from bq_entity_resolution.sql.utils import validate_identifier
+
         table_name = _local_table_name(table_ref)
+        validate_identifier(table_name, context="table name")
         result = self._conn.execute(f"DESCRIBE {table_name}")
         columns = []
         for row in result.fetchall():
@@ -199,28 +230,46 @@ class DuckDBBackend:
             columns.append(ColumnDef(name=col_name, type=mapped_type, nullable=nullable))
         return TableSchema(columns=tuple(columns))
 
+    def estimate_bytes(self, sql: str, label: str = "") -> int:
+        """DuckDB does not support cost estimation; always returns 0."""
+        return 0
+
     def row_count(self, table_ref: str) -> int:
+        self._check_open()
+        from bq_entity_resolution.sql.utils import validate_identifier
+
         table_name = _local_table_name(table_ref)
+        validate_identifier(table_name, context="table name")
         result = self._conn.execute(f"SELECT COUNT(*) FROM {table_name}")
         return result.fetchone()[0]
 
     def load_csv(self, table_name: str, csv_path: str) -> None:
         """Load a CSV file into a table for test setup."""
+        from bq_entity_resolution.sql.utils import validate_identifier
+
+        validate_identifier(table_name, "table_name")
+        safe_path = csv_path.replace("'", "''")
         self._conn.execute(
             f"CREATE OR REPLACE TABLE {table_name} AS "
-            f"SELECT * FROM read_csv_auto('{csv_path}')"
+            f"SELECT * FROM read_csv_auto('{safe_path}')"
         )
 
     def create_table_from_data(self, table_name: str, data: list[dict]) -> None:
         """Create a table from a list of dicts for test setup."""
         if not data:
             return
+        from bq_entity_resolution.sql.utils import sql_escape, validate_identifier
+
+        validate_identifier(table_name, "table_name")
         columns = list(data[0].keys())
+        for c in columns:
+            validate_identifier(c, "column_name")
         col_defs = ", ".join(f"{c} VARCHAR" for c in columns)
         self._conn.execute(f"CREATE OR REPLACE TABLE {table_name} ({col_defs})")
         for row in data:
             values = ", ".join(
-                f"'{v}'" if v is not None else "NULL" for v in row.values()
+                f"'{sql_escape(v)}'" if v is not None else "NULL"
+                for v in row.values()
             )
             self._conn.execute(f"INSERT INTO {table_name} VALUES ({values})")
 

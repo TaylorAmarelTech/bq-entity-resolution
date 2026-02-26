@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from bq_entity_resolution.config.schema import IncrementalConfig, HashCursorConfig
+from bq_entity_resolution.config.schema import HashCursorConfig, IncrementalConfig
 
 
 class TestIncrementalConfigDefaults:

@@ -18,6 +18,13 @@ def adapt_sql(sql: str) -> str:
         lambda m: m.group(3),
         sql,
     )
+    # Strip 2-part backtick-quoted names (UDF dataset refs):
+    # e.g. `er_udfs.jaro_winkler`(...) -> jaro_winkler(...)
+    sql = re.sub(
+        r'`([^`\s]+)\.([^`\s]+)`',
+        lambda m: m.group(2),
+        sql,
+    )
     # Remove remaining backtick quoting (simple identifiers)
     sql = sql.replace("`", "")
     # CURRENT_TIMESTAMP() -> current_timestamp (DuckDB form)
@@ -56,6 +63,8 @@ def adapt_sql(sql: str) -> str:
     sql = re.sub(r'\bAS\s+FLOAT64\b', 'AS DOUBLE', sql)
     sql = re.sub(r'\bAS\s+INT64\b', 'AS BIGINT', sql)
     sql = re.sub(r'\bAS\s+STRING\b', 'AS VARCHAR', sql)
+    sql = re.sub(r'\bAS\s+NUMERIC\b', 'AS DECIMAL(38, 9)', sql)
+    sql = re.sub(r'\bAS\s+BIGNUMERIC\b', 'AS DECIMAL(76, 38)', sql)
     # [OFFSET(n)] -> [n+1] (BQ 0-indexed -> DuckDB 1-indexed)
     # Must run AFTER APPROX_QUANTILES and ARRAY_AGG[OFFSET] rewrites
     sql = re.sub(
@@ -120,6 +129,7 @@ def rewrite_unnest(sql: str) -> str:
     # Iterative: process one UNNEST at a time, re-scanning after each change
     max_iter = 20
     for _ in range(max_iter):
+        prev_sql = sql
         m = re.search(r'\bUNNEST\(', sql, re.IGNORECASE)
         if not m:
             break
@@ -182,6 +192,10 @@ def rewrite_unnest(sql: str) -> str:
         else:
             # No alias -- skip to avoid infinite loop
             sql = before + "_UNNEST_DONE_(" + inner_expr + ")" + after
+
+        # Safety: break if no progress was made
+        if sql == prev_sql:
+            break
 
     # Restore UNNEST from markers
     sql = sql.replace("_UNNEST_DONE_(", "UNNEST(")

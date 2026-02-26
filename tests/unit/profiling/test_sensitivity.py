@@ -5,17 +5,17 @@ from __future__ import annotations
 import pytest
 
 from bq_entity_resolution.config.schema import (
+    BlockingKeyDef,
     BlockingPathDef,
+    ColumnMapping,
     ComparisonDef,
+    FeatureEngineeringConfig,
     MatchingTierConfig,
     PipelineConfig,
     ProjectConfig,
     SourceConfig,
-    ColumnMapping,
     ThresholdConfig,
     TierBlockingConfig,
-    FeatureEngineeringConfig,
-    BlockingKeyDef,
 )
 from bq_entity_resolution.profiling.weight_sensitivity import WeightSensitivityAnalyzer
 
@@ -45,7 +45,10 @@ def sample_config() -> PipelineConfig:
                     paths=[BlockingPathDef(keys=["bk"])],
                 ),
                 comparisons=[
-                    ComparisonDef(left="first_name", right="first_name", method="jaro_winkler", weight=3.0),
+                    ComparisonDef(
+                        left="first_name", right="first_name",
+                        method="jaro_winkler", weight=3.0,
+                    ),
                     ComparisonDef(left="last_name", right="last_name", method="exact", weight=5.0),
                     ComparisonDef(left="email", right="email", method="exact", weight=4.0),
                     ComparisonDef(left="state", right="state", method="exact", weight=0.5),

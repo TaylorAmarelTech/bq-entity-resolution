@@ -3,7 +3,6 @@
 import math
 
 from bq_entity_resolution.matching.parameters import (
-    ComparisonParameters,
     LevelParameters,
     ParameterEstimator,
     TierParameters,

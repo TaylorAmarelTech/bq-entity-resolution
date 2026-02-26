@@ -8,7 +8,6 @@ import pytest
 
 from bq_entity_resolution.profiling.column_profiler import ColumnProfile, ColumnProfiler
 
-
 # ---------------------------------------------------------------------------
 # ColumnProfile property tests
 # ---------------------------------------------------------------------------
@@ -226,14 +225,15 @@ class TestWeightOrdering:
 
     @pytest.fixture()
     def typical_profiles(self) -> list[ColumnProfile]:
+        rows = 15_000_000
         return [
-            ColumnProfile("ssn", cardinality=10_000_000, total_rows=15_000_000, null_rate=0.02),
-            ColumnProfile("email", cardinality=5_000_000, total_rows=15_000_000, null_rate=0.1),
-            ColumnProfile("full_name", cardinality=1_000_000, total_rows=15_000_000, null_rate=0.01),
-            ColumnProfile("date_of_birth", cardinality=30_000, total_rows=15_000_000, null_rate=0.05),
-            ColumnProfile("city", cardinality=5_000, total_rows=15_000_000, null_rate=0.03),
-            ColumnProfile("state", cardinality=50, total_rows=15_000_000, null_rate=0.01),
-            ColumnProfile("gender", cardinality=3, total_rows=15_000_000, null_rate=0.0),
+            ColumnProfile("ssn", cardinality=10_000_000, total_rows=rows, null_rate=0.02),
+            ColumnProfile("email", cardinality=5_000_000, total_rows=rows, null_rate=0.1),
+            ColumnProfile("full_name", cardinality=1_000_000, total_rows=rows, null_rate=0.01),
+            ColumnProfile("date_of_birth", cardinality=30_000, total_rows=rows, null_rate=0.05),
+            ColumnProfile("city", cardinality=5_000, total_rows=rows, null_rate=0.03),
+            ColumnProfile("state", cardinality=50, total_rows=rows, null_rate=0.01),
+            ColumnProfile("gender", cardinality=3, total_rows=rows, null_rate=0.0),
         ]
 
     def test_ssn_most_discriminative(self, typical_profiles):

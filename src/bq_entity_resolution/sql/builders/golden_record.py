@@ -25,14 +25,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from bq_entity_resolution.columns import (
-    ENTITY_UID,
     CLUSTER_ID,
-    SOURCE_NAME,
-    SOURCE_UPDATED_AT,
     COMPLETENESS_SCORE,
+    ENTITY_UID,
+    SOURCE_NAME,
     SOURCE_RANK,
+    SOURCE_UPDATED_AT,
 )
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import sql_escape, validate_identifier
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,14 @@ class GoldenRecordParams:
     source_priority: list[str] = field(default_factory=list)
     scoring_columns: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        for col in self.source_columns:
+            validate_identifier(col, "golden record source column")
+        for col in self.scoring_columns:
+            validate_identifier(col, "golden record scoring column")
+        for fs in self.field_strategies:
+            validate_identifier(fs.column, "field strategy column")
+
 
 def _get_strategy(column: str, params: GoldenRecordParams) -> FieldStrategy:
     """Get the merge strategy for a specific column."""
@@ -93,7 +102,7 @@ def _build_order_by(strategy: FieldStrategy) -> str:
     elif strategy.strategy == "source_priority" and strategy.source_priority:
         cases = []
         for i, src in enumerate(strategy.source_priority):
-            cases.append(f"WHEN '{src}' THEN {i}")
+            cases.append(f"WHEN '{sql_escape(src)}' THEN {i}")
         case_expr = " ".join(cases)
         return (
             f"CASE {SOURCE_NAME} {case_expr} ELSE 999 END ASC, "
@@ -168,7 +177,7 @@ def build_golden_record_cte(params: GoldenRecordParams) -> SQLExpression:
     if params.source_priority:
         priority_cases = []
         for i, src in enumerate(params.source_priority):
-            priority_cases.append(f"WHEN '{src}' THEN {i}")
+            priority_cases.append(f"WHEN '{sql_escape(src)}' THEN {i}")
         case_expr = " ".join(priority_cases)
         source_rank_expr = f"CASE {SOURCE_NAME} {case_expr} ELSE 999 END"
     else:
@@ -202,7 +211,11 @@ def build_golden_record_cte(params: GoldenRecordParams) -> SQLExpression:
         strategy = _get_strategy(col, params)
         if col in vote_columns:
             # Use the voted value, with FIRST_VALUE as fallback
-            fallback_order = f"{COMPLETENESS_SCORE} DESC, {SOURCE_UPDATED_AT} DESC, {ENTITY_UID} ASC"
+            fallback_order = (
+                f"{COMPLETENESS_SCORE} DESC, "
+                f"{SOURCE_UPDATED_AT} DESC, "
+                f"{ENTITY_UID} ASC"
+            )
             field_exprs.append(
                 f"    COALESCE(\n"
                 f"      vote_{col}.voted_value,\n"
@@ -234,7 +247,10 @@ def build_golden_record_cte(params: GoldenRecordParams) -> SQLExpression:
     parts.append(f"    cs.{SOURCE_RANK},")
     parts.append("    ROW_NUMBER() OVER (")
     parts.append(f"      PARTITION BY cs.{CLUSTER_ID}")
-    parts.append(f"      ORDER BY cs.{COMPLETENESS_SCORE} DESC, cs.{SOURCE_UPDATED_AT} DESC, cs.{ENTITY_UID} ASC")
+    parts.append(
+        f"      ORDER BY cs.{COMPLETENESS_SCORE} DESC, "
+        f"cs.{SOURCE_UPDATED_AT} DESC, cs.{ENTITY_UID} ASC"
+    )
     parts.append("    ) AS rn")
 
     # FROM clause with optional vote joins

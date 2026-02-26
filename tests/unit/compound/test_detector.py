@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from bq_entity_resolution.compound.detector import (
     CompoundDetectionConfig,
     CompoundDetector,

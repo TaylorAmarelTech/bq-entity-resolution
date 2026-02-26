@@ -2,10 +2,9 @@
 
 import pytest
 
+from bq_entity_resolution.pipeline.dag import StageDAG, StageNode, build_pipeline_dag
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
-from bq_entity_resolution.pipeline.dag import StageDAG, StageNode, build_pipeline_dag
-
 
 # -- Dummy stages for testing --
 
@@ -279,6 +278,7 @@ class TestBuildPipelineDAG:
             min_score=1.0,
             match_threshold=None,
             log_prior_odds=0.0,
+            min_matching_comparisons=0,
         )
 
         al = NS(enabled=False, queue_size=100, uncertainty_window=0.3)

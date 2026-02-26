@@ -8,15 +8,16 @@
 **bq-entity-resolution** is a config-driven entity resolution pipeline for BigQuery.
 Python generates SQL; BigQuery (or DuckDB locally) executes it. No data leaves the warehouse.
 
-- **1,256 tests**, all passing (132 source files, 16,869 LOC)
+- **2,879 tests**, all passing (160+ source files, 25,000+ LOC)
 - **v0.2.0** — published to PyPI as `bq-entity-resolution`
 - **Python 3.11+** with Pydantic v2, Click, structlog, sqlglot
+- **19 entity types**, 57 column roles, 16 domain presets, 20 example configs
 
 ## Quick Reference
 
 ```bash
 # Tests
-python -m pytest tests/ -v                    # 1256 tests, ~40s
+python -m pytest tests/ -v                    # 2879 tests, ~49s
 C:/Users/amare/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/ -v  # Windows
 
 # Lint + Type Check
@@ -169,7 +170,7 @@ feature_engineering:
   name_features:
     features:
       - name: first_name_clean
-        function: name_clean         # One of 53 built-in functions
+        function: name_clean         # One of 92 built-in functions
         input: first_name
   blocking_keys:
     - name: bk_email
@@ -185,7 +186,7 @@ matching_tiers:
     comparisons:
       - left: email_clean
         right: email_clean
-        method: exact                # One of 26 built-in methods
+        method: exact                # One of 49 built-in methods
         weight: 5.0
     threshold:
       min_score: 5.0
@@ -359,18 +360,18 @@ The pipeline follows Google's Application Default Credentials (ADC):
 
 ```
 src/bq_entity_resolution/
-  config/          Pydantic v2 schema (28 models), YAML loader, presets, role mapping, validators
+  config/          Pydantic v2 schema (28 models), YAML loader, 16 presets, 57 roles, 29 validators, 19 entity types
   config/models/   7 domain-specific config sub-modules (blocking, features, matching, etc.)
-  sql/builders/    14 Python SQL builder modules (type-safe, testable)
+  sql/builders/    21 Python SQL builder modules (type-safe, testable)
   sql/             SQLExpression wrapper (sqlglot), utilities
-  features/        Feature function registry (60+ functions via @register)
-  matching/        Comparison registry (30+ functions), F-S parameters, active learning
+  features/        Feature function registry (92 functions via @register)
+  matching/        Comparison registry (49 functions), F-S parameters, active learning
   blocking/        Blocking key validation, LSH bucket logic
   reconciliation/  Clustering descriptions, canonical output logic
   embeddings/      BigQuery ML embedding generation + LSH
   watermark/       Watermark tracking + checkpoint/resume
   compound/        Compound record detection + splitting (family names, slash-separated)
-  stages/          12 Stage classes in focused modules (clustering, canonical_index, gold_output, etc.)
+  stages/          15 Stage classes in focused modules (clustering, canonical_index, gold_output, bqml, etc.)
   pipeline/        Pipeline, StageDAG, Plan, Executor, Validator, Quality Gates
   backends/        Pluggable backends (BigQuery, DuckDB, BQ Emulator)
   profiling/       Column profiling + weight sensitivity analysis
@@ -397,8 +398,8 @@ src/bq_entity_resolution/
 
 | What | Where | How |
 |------|-------|-----|
-| Feature function | `features/registry.py` | Add `@register("name")` function |
-| Comparison function | `matching/comparisons.py` | Add `@register("name")` function |
+| Feature function | `features/<domain>.py` | Add `@register("name")` function |
+| Comparison function | `matching/comparisons/<domain>.py` | Add `@register("name")` function |
 | Matching tier | YAML config | Add block under `matching_tiers:` |
 | Source table | YAML config | Add block under `sources:` |
 | Column | YAML config | Add to source's `columns:` list |
@@ -412,13 +413,13 @@ src/bq_entity_resolution/
 
 1. `config/schema.py` — Complete YAML schema (30+ Pydantic models)
 2. `pipeline/pipeline.py` — Pipeline class (main entry point)
-3. `config/presets.py` — quick_config() and all preset functions
-4. `config/roles.py` — Column role → auto-feature/blocking/comparison mapping
-5. `features/registry.py` — All 60+ feature functions
-6. `matching/comparisons.py` — All 30+ comparison functions
+3. `config/presets/` — quick_config() and 16 domain-specific presets (person, insurance, telecom, logistics, retail, etc.)
+4. `config/roles.py` — 57 column roles → auto-feature/blocking/comparison mapping (10 industry role sets)
+5. `features/registry.py` — All 92 feature functions (barrel import from 14 sub-modules)
+6. `matching/comparisons/__init__.py` — All 49 comparison functions (barrel import from 7 sub-modules)
 7. `naming.py` — All table names
 8. `columns.py` — All column name constants
-9. `config/examples/` — 5 example configs (minimal to production-grade)
+9. `config/examples/` — 20 example configs (minimal to production-grade, covering 10+ industries)
 
 ## Environment Variables
 
@@ -481,9 +482,11 @@ See `docs/incremental_processing.md` for full guide and `config/examples/increme
 - Jaro-Winkler requires BigQuery JS UDF (auto-created)
 - Connected components and EM use BQ scripting — DuckDB interprets via Python loop
 - DuckDB SQL adaptation uses regex rewriting (may miss edge cases)
-- No PII masking in logs (planned for v0.3.0)
-- No distributed locking for concurrent runs (planned for v0.3.0)
+- PII redaction in SQL audit logs (implemented in executor via `_redact_sql()`; runtime logs not yet covered)
+- Distributed locking for concurrent runs (implemented in `pipeline/lock.py`)
 - Audit trail is optional (should be mandatory for regulated industries)
+
+See `docs/TUNING.md` for output schema reference and common tuning remediation steps.
 
 ## Scale Guidelines
 

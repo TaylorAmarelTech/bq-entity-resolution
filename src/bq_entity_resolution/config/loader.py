@@ -29,10 +29,11 @@ def _interpolate_env_vars(obj: Any) -> Any:
                 var_name, default = expr.split(":-", 1)
                 return os.environ.get(var_name.strip(), default)
             value = os.environ.get(expr)
-            if value is None:
+            if value is None or value.strip() == "":
                 raise ConfigurationError(
-                    f"Environment variable '${{{expr}}}' is not set. "
-                    f"Set it or provide a default: ${{{expr}:-default_value}}"
+                    f"Environment variable '${{{expr}}}' is not set or empty. "
+                    f"Set it to a non-empty value or provide a default: "
+                    f"${{{expr}:-default_value}}"
                 )
             return value
 
@@ -74,6 +75,12 @@ def _resolve_includes(
     """
     if seen is None:
         seen = set()
+
+    if len(seen) > 50:
+        raise ConfigurationError(
+            "Include chain too deep (max 50 levels). "
+            "Check for circular or excessively nested includes."
+        )
 
     merged: dict[str, Any] = {}
     for include_rel in include_paths:

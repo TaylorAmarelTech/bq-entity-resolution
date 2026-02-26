@@ -8,7 +8,7 @@ enabling O(n*k) blocking instead of O(n^2) comparisons.
 
 from __future__ import annotations
 
-from bq_entity_resolution.config.schema import EmbeddingConfig, LSHConfig
+from bq_entity_resolution.config.schema import LSHConfig
 
 
 def lsh_bucket_columns(lsh_config: LSHConfig) -> list[str]:

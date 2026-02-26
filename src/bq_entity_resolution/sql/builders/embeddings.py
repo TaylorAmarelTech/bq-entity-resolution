@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from bq_entity_resolution.columns import BQML_PREDICTED_EMBEDDING, EMBEDDING_INPUT_TEXT, ENTITY_UID
 from bq_entity_resolution.sql.expression import SQLExpression
+from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,11 @@ class EmbeddingsParams:
     concat_expression: str
     model_name: str
     dimensions: int
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.target_table)
+        validate_table_ref(self.source_table)
+        validate_table_ref(self.model_name)
 
 
 @dataclass(frozen=True)
@@ -33,6 +39,11 @@ class LSHParams:
     dimensions: int
     seed: int
     bucket_prefix: str = "lsh_bucket"
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.target_table)
+        validate_table_ref(self.embedding_table)
+        validate_identifier(self.bucket_prefix, "LSH bucket prefix")
 
 
 def build_embeddings_sql(params: EmbeddingsParams) -> SQLExpression:
@@ -119,7 +130,9 @@ def build_lsh_buckets_sql(params: LSHParams) -> SQLExpression:
     lines.append("    p.table_id,")
     lines.append("    p.func_id,")
     lines.append(
-        f"    SUM(e.{BQML_PREDICTED_EMBEDDING}[OFFSET(p.dim_idx)] * p.projection_value) AS dot_product"
+        f"    SUM(e.{BQML_PREDICTED_EMBEDDING}"
+        f"[OFFSET(p.dim_idx)] * p.projection_value)"
+        f" AS dot_product"
     )
     lines.append("  FROM embeddings e")
     lines.append("  CROSS JOIN projections p")

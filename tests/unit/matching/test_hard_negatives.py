@@ -2,8 +2,8 @@
 
 import pytest
 
-from bq_entity_resolution.matching.hard_negatives import build_hard_negative_expr
 from bq_entity_resolution.exceptions import SQLGenerationError
+from bq_entity_resolution.matching.hard_negatives import build_hard_negative_expr
 
 
 class _NS:

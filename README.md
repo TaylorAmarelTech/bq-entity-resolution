@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/bq-entity-resolution.svg)](https://pypi.org/project/bq-entity-resolution/)
 [![Python](https://img.shields.io/pypi/pyversions/bq-entity-resolution.svg)](https://pypi.org/project/bq-entity-resolution/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-929%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1721%20passing-brightgreen.svg)]()
 
 A configurable, multi-tier entity resolution pipeline for Google BigQuery. Python handles configuration and SQL generation; BigQuery executes all data processing. No data leaves the warehouse.
 
@@ -346,20 +346,24 @@ matching_tiers:
 
 ## Built-in Functions
 
-### Feature Functions (53)
+### Feature Functions (92)
 
 | Category | Functions |
 |----------|-----------|
-| Name | `name_clean`, `name_clean_strict`, `first_letter`, `first_n_chars`, `char_length`, `soundex`, `extract_salutation`, `strip_salutation`, `extract_suffix`, `strip_suffix`, `word_count`, `first_word`, `last_word`, `initials`, `strip_business_suffix`, `name_fingerprint` |
-| Nickname | `nickname_canonical` (70+ pairs: Bob/Robert, Bill/William, etc.), `nickname_match_key` |
-| Transposition | `sorted_name_tokens`, `sorted_name_fingerprint` |
+| Name | `name_clean`, `name_clean_strict`, `first_letter`, `first_n_chars`, `char_length`, `soundex`, `extract_salutation`, `strip_salutation`, `extract_suffix`, `strip_suffix`, `word_count`, `first_word`, `last_word`, `initials`, `strip_business_suffix`, `name_fingerprint`, `sorted_name_tokens`, `sorted_name_fingerprint`, `nickname_canonical`, `nickname_match_key` |
+| Entity | `entity_type_classify`, `name_format_detect`, `is_multi_person` |
+| Email | `email_is_role_address`, `email_local_part`, `email_domain`, `email_domain_category` |
+| Business | `dba_extract`, `dba_normalize`, `business_type_extract`, `business_core_name` |
+| Negative Flags | `extract_generational_suffix`, `extract_roman_numeral`, `is_hoa_trust_careof`, `extract_numbered_entity_suffix`, `geographic_qualifier` |
 | Address | `address_standardize` (40+ USPS abbreviations), `extract_street_number`, `extract_street_name`, `extract_unit_number` |
-| Contact | `phone_standardize` (handles country codes), `phone_area_code`, `phone_last_four`, `email_domain`, `email_local_part`, `email_domain_type` |
+| Contact | `phone_standardize` (handles country codes), `phone_area_code`, `phone_last_four`, `email_domain_type` |
 | Blocking | `farm_fingerprint`, `farm_fingerprint_concat` |
 | Zip/Date | `zip5`, `zip3`, `year_of_date`, `date_to_string` |
-| Utility | `upper_trim`, `lower_trim`, `left`, `right`, `coalesce`, `concat`, `nullif_empty`, `identity` |
+| Industry | `policy_number_normalize`, `claim_number_normalize`, `npi_validate`, `mrn_normalize`, and 12 more |
+| Geo | `geo_hash`, `lat_lon_bucket`, `geo_region_code` |
+| Utility | `upper_trim`, `lower_trim`, `left`, `right`, `coalesce`, `concat`, `nullif_empty`, `identity`, and more |
 
-### Comparison Functions (26)
+### Comparison Functions (49)
 
 | Category | Functions |
 |----------|-----------|
@@ -368,9 +372,10 @@ matching_tiers:
 | Jaro-Winkler | `jaro_winkler`, `jaro_winkler_score` (BigQuery JS UDF, auto-created) |
 | Phonetic | `soundex_match`, `metaphone_match` |
 | Vector | `cosine_similarity`, `cosine_similarity_score` (via `ML.DISTANCE`) |
-| Numeric/Date | `numeric_within`, `date_within_days` |
+| Numeric/Date | `numeric_within`, `date_within_days`, `date_within_months` |
 | String | `contains`, `starts_with` |
-| Token | `token_set_match`, `token_set_score`, `initials_match`, `abbreviation_match` |
+| Token | `token_set_match`, `token_set_score`, `initials_match`, `abbreviation_match`, `dice_coefficient`, `dice_coefficient_score`, `overlap_coefficient`, `overlap_coefficient_score`, `monge_elkan`, `monge_elkan_score`, `token_sort_ratio`, `token_sort_ratio_score` |
+| Composite | 9 composite comparison functions |
 | Hard Negative | `different`, `null_either`, `length_mismatch` |
 
 ## CLI Commands
@@ -385,6 +390,10 @@ matching_tiers:
 | `bq-er ingest-labels` | Ingest human labels and optionally retrain |
 | `bq-er profile` | Profile source columns for weight suggestions |
 | `bq-er analyze` | Analyze weight sensitivity |
+| `bq-er init` | Generate starter config from source table |
+| `bq-er check-env` | Check BigQuery credentials and permissions |
+| `bq-er describe` | Describe pipeline configuration |
+| `bq-er profile-cursors` | Recommend cursor strategies for incremental processing |
 
 ## Environment Variables
 
@@ -430,12 +439,18 @@ pipeline.run(backend=DuckDBBackend())
 | [`person_linkage.yml`](config/examples/person_linkage.yml) | Cross-source record linkage with comparison pool |
 | [`probabilistic_matching.yml`](config/examples/probabilistic_matching.yml) | Fellegi-Sunter with EM training and active learning |
 | [`insurance_entity.yml`](config/examples/insurance_entity.yml) | 7-tier insurance entity resolution (production-grade) |
+| [`enrichment_geocoding.yml`](config/examples/enrichment_geocoding.yml) | Census geocoding enrichment joins |
+| [`compound_detection.yml`](config/examples/compound_detection.yml) | Compound name detection and splitting |
+| [`incremental_processing.yml`](config/examples/incremental_processing.yml) | Incremental processing with composite watermarks |
+| [`banking_kyc.yml`](config/examples/banking_kyc.yml) | Banking KYC entity resolution |
+| [`healthcare_patient.yml`](config/examples/healthcare_patient.yml) | Healthcare patient matching |
+| [`advanced_signal_framework.yml`](config/examples/advanced_signal_framework.yml) | Hard positives, severity classes, score banding |
 
 ## Development
 
 ```bash
 pip install -e ".[dev,local]"
-python -m pytest tests/ -v               # 929 tests, ~35s
+python -m pytest tests/ -v               # 1721 tests, ~44s
 python -m ruff check src/                 # lint
 python -m mypy src/                       # type check
 ```
@@ -447,8 +462,8 @@ src/bq_entity_resolution/
   config/        Pydantic v2 schema, YAML loader, presets, role mapping, validators
   sql/builders/  14 Python SQL builder modules (type-safe, testable)
   sql/           SQLExpression wrapper (sqlglot-based), SQL utilities
-  features/      Feature function registry (53 functions via @register)
-  matching/      Comparison registry (26 functions), parameters, active learning
+  features/      Feature function registry (92 functions via @register)
+  matching/      Comparison registry (49 functions), parameters, active learning
   blocking/      Blocking key validation, LSH bucket logic
   reconciliation/  Clustering strategy descriptions, canonical output logic
   embeddings/    BigQuery ML embedding generation + LSH

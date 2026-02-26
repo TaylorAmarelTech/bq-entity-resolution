@@ -22,7 +22,7 @@ Extending the pipeline::
 
     # Register custom feature/comparison functions
     @register_feature("my_custom_feature")
-    def my_custom_feature(inputs, **_):
+    def my_custom_feature(inputs: list[str], **_: Any) -> str:
         return f"UPPER(TRIM({inputs[0]}))"
 
     # Replace or inject stages
@@ -32,23 +32,41 @@ Extending the pipeline::
     pipeline = Pipeline.from_stages(config, stages=[...], explicit_edges={...})
 """
 
-# Backends (for local testing and production)
-from bq_entity_resolution.backends.duckdb import DuckDBBackend
 from bq_entity_resolution.backends.protocol import Backend, QueryResult
+from bq_entity_resolution.config.entity_types import (
+    ENTITY_TYPE_TEMPLATES,
+    EntityTypeTemplate,
+    get_entity_type,
+    list_entity_types,
+    register_entity_type,
+)
 from bq_entity_resolution.config.loader import load_config
-
-# Presets (progressive disclosure)
 from bq_entity_resolution.config.presets import (
     business_dedup_preset,
+    education_student_preset,
     financial_transaction_preset,
     healthcare_patient_preset,
+    identity_fraud_preset,
     insurance_dedup_preset,
+    logistics_carrier_preset,
     person_dedup_preset,
     person_linkage_preset,
+    public_sector_preset,
     quick_config,
+    real_estate_property_preset,
+    retail_customer_preset,
+    telecom_subscriber_preset,
+    travel_guest_preset,
+    vendor_master_preset,
 )
-
-# Role detection utilities
+from bq_entity_resolution.exceptions import (
+    ConfigurationError,
+    EntityResolutionError,
+    PipelineAbortError,
+    SQLExecutionError,
+)
+from bq_entity_resolution.watermark.checkpoint import CheckpointManager
+from bq_entity_resolution.watermark.manager import WatermarkManager
 from bq_entity_resolution.config.roles import (
     blocking_keys_for_role,
     comparisons_for_role,
@@ -84,23 +102,32 @@ from bq_entity_resolution.pipeline.gates import (
     GateResult,
     OutputNotEmptyGate,
 )
-
-# Core API
-from bq_entity_resolution.pipeline.pipeline import Pipeline
+from bq_entity_resolution.pipeline.health import HealthProbe
+from bq_entity_resolution.pipeline.pipeline import CostEstimate, Pipeline
 from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
+from bq_entity_resolution.pipeline.shutdown import GracefulShutdown
 from bq_entity_resolution.pipeline.validator import ContractViolation
 from bq_entity_resolution.sql.expression import SQLExpression
-
-# Extensibility: stages, DAG, gates
 from bq_entity_resolution.stages.base import Stage, StageResult, TableRef
+
+# BQML classification (supervised match prediction)
+from bq_entity_resolution.stages.bqml_classification import (
+    BQMLEvaluateStage,
+    BQMLPredictStage,
+    BQMLTrainingStage,
+    FeatureMatrixExportStage,
+)
 from bq_entity_resolution.version import __version__
 
 
-# Lazy import for BigQueryBackend (requires google-cloud-bigquery)
+# Lazy imports for backends with optional dependencies
 def __getattr__(name: str):
     if name == "BigQueryBackend":
         from bq_entity_resolution.backends.bigquery import BigQueryBackend
         return BigQueryBackend
+    if name == "DuckDBBackend":
+        from bq_entity_resolution.backends.duckdb import DuckDBBackend
+        return DuckDBBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -118,6 +145,15 @@ __all__ = [
     "insurance_dedup_preset",
     "financial_transaction_preset",
     "healthcare_patient_preset",
+    "telecom_subscriber_preset",
+    "logistics_carrier_preset",
+    "retail_customer_preset",
+    "real_estate_property_preset",
+    "public_sector_preset",
+    "education_student_preset",
+    "travel_guest_preset",
+    "vendor_master_preset",
+    "identity_fraud_preset",
     # Registries
     "FEATURE_FUNCTIONS",
     "COMPARISON_FUNCTIONS",
@@ -155,4 +191,27 @@ __all__ = [
     "features_for_role",
     "blocking_keys_for_role",
     "comparisons_for_role",
+    # Entity type templates
+    "EntityTypeTemplate",
+    "ENTITY_TYPE_TEMPLATES",
+    "register_entity_type",
+    "get_entity_type",
+    "list_entity_types",
+    # BQML classification
+    "FeatureMatrixExportStage",
+    "BQMLTrainingStage",
+    "BQMLPredictStage",
+    "BQMLEvaluateStage",
+    # Production deployment
+    "HealthProbe",
+    "GracefulShutdown",
+    "CheckpointManager",
+    "WatermarkManager",
+    # Cost estimation
+    "CostEstimate",
+    # Exceptions
+    "EntityResolutionError",
+    "ConfigurationError",
+    "PipelineAbortError",
+    "SQLExecutionError",
 ]

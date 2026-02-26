@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
-
-import pytest
 
 from bq_entity_resolution.monitoring.metrics import MetricsCollector
 
@@ -32,9 +28,18 @@ def _make_config(metrics_enabled=True, destination="bigquery"):
 
 def _make_result(status="success", run_id="run-001", error=None):
     """Create a minimal PipelineResult-like object."""
-    sr1 = _NS(stage_name="staging", success=True, skipped=False, sql_count=3, duration_seconds=1.5)
-    sr2 = _NS(stage_name="features", success=True, skipped=False, sql_count=5, duration_seconds=2.0)
-    sr3 = _NS(stage_name="skipped_stage", success=True, skipped=True, sql_count=0, duration_seconds=0)
+    sr1 = _NS(
+        stage_name="staging", success=True, skipped=False,
+        sql_count=3, duration_seconds=1.5,
+    )
+    sr2 = _NS(
+        stage_name="features", success=True, skipped=False,
+        sql_count=5, duration_seconds=2.0,
+    )
+    sr3 = _NS(
+        stage_name="skipped_stage", success=True, skipped=True,
+        sql_count=0, duration_seconds=0,
+    )
     return _NS(
         run_id=run_id,
         status=status,

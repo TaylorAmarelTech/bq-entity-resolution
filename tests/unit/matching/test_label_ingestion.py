@@ -7,7 +7,6 @@ from bq_entity_resolution.config.schema import (
 from bq_entity_resolution.matching.active_learning import ActiveLearningEngine
 from bq_entity_resolution.matching.parameters import ParameterEstimator
 
-
 # ---------------------------------------------------------------
 # Config model tests
 # ---------------------------------------------------------------

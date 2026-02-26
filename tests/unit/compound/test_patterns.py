@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from bq_entity_resolution.compound.patterns import (
-    CONJUNCTIONS,
     CONJUNCTION_RE,
+    CONJUNCTIONS,
     FAMILY_RE,
     FAMILY_SUFFIXES,
     SLASH_RE,

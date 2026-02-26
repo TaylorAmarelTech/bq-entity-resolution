@@ -13,14 +13,23 @@ import duckdb
 
 logger = logging.getLogger(__name__)
 
+_SCRIPTING_LOOP_MAX_ITERATIONS = 100
+
 
 def is_bq_scripting(sql: str) -> bool:
-    """Detect if SQL contains BQ scripting constructs."""
-    upper = sql.upper().lstrip()
-    # Any DECLARE, SET, WHILE, or LOOP statement indicates BQ scripting
+    """Detect if SQL contains BQ scripting constructs.
+
+    Uses line-start anchoring to avoid matching keywords inside
+    comments, string literals, or substrings (e.g. a column named
+    ``declared_amount``).
+    """
+    upper = sql.upper()
+    # Match only at the start of a line (with optional leading whitespace)
     return bool(
-        re.search(r'\bDECLARE\b', upper)
-        or (re.search(r'\bSET\b', upper) and re.search(r'\bSET\s+\w+\s*=', sql, re.IGNORECASE))
+        re.search(r'^\s*DECLARE\b', upper, re.MULTILINE)
+        or re.search(r'^\s*SET\s+\w+\s*=', sql, re.IGNORECASE | re.MULTILINE)
+        or re.search(r'^\s*BEGIN\b', upper, re.MULTILINE)
+        or re.search(r'^\s*WHILE\b', upper, re.MULTILINE)
     )
 
 
@@ -96,9 +105,9 @@ def execute_bq_scripting(
             except duckdb.InvalidInputException:
                 pass
 
-    # Execute loop
-    max_iterations = 100
-    for _ in range(max_iterations):
+    # Execute loop — safety cap prevents infinite loops
+    max_iterations = _SCRIPTING_LOOP_MAX_ITERATIONS
+    for iteration_idx in range(max_iterations):
         # Check condition
         if condition:
             cond_sql = substitute_vars(condition, variables)
@@ -106,7 +115,8 @@ def execute_bq_scripting(
                 result = conn.execute(f"SELECT {cond_sql}")
                 if not result.fetchone()[0]:
                     break
-            except Exception:
+            except Exception as e:
+                logger.warning("WHILE condition eval failed: %s", e)
                 break
 
         # Execute loop body
@@ -121,6 +131,28 @@ def execute_bq_scripting(
                 should_leave = True
                 break
 
+            # Skip END IF (artifact of statement splitting)
+            if re.match(r'END\s+IF\b', stmt, re.IGNORECASE):
+                continue
+
+            # Handle IF ... THEN ... END IF
+            if_match = re.match(
+                r'IF\s+(.+?)\s+THEN\s+(.*?)(?:\s*END\s+IF)?$',
+                stmt, re.IGNORECASE | re.DOTALL,
+            )
+            if if_match:
+                cond_sql = substitute_vars(if_match.group(1), variables)
+                try:
+                    cond_result = conn.execute(f"SELECT {cond_sql}")
+                    if cond_result.fetchone()[0]:
+                        body = if_match.group(2).strip()
+                        if re.match(r'LEAVE\b', body, re.IGNORECASE):
+                            should_leave = True
+                            break
+                except Exception as e:
+                    logger.warning("IF condition eval failed: %s", e)
+                continue
+
             # Handle SET var = (expr)
             set_match = re.match(
                 r'SET\s+(\w+)\s*=\s*(.+)', stmt, re.IGNORECASE
@@ -132,23 +164,27 @@ def execute_bq_scripting(
                     result = conn.execute(f"SELECT {expr}")
                     variables[var_name] = result.fetchone()[0]
                 except Exception as e:
-                    logger.debug("SET %s eval failed in loop: %s", var_name, e)
+                    logger.error("SET %s eval failed in loop: %s", var_name, e)
+                    variables[var_name] = None
                 continue
 
-            # Regular statement
+            # Regular statement — errors propagate (no silent swallowing)
             stmt = substitute_vars(stmt, variables)
-            try:
-                result = conn.execute(stmt)
-                if result and result.description:
-                    try:
-                        total_rows += len(result.fetchall())
-                    except duckdb.InvalidInputException:
-                        pass
-            except Exception as e:
-                logger.debug("BQ scripting loop error: %s", e)
+            result = conn.execute(stmt)
+            if result and result.description:
+                try:
+                    total_rows += len(result.fetchall())
+                except duckdb.InvalidInputException:
+                    pass
 
         if should_leave:
             break
+    else:
+        # Loop completed without break — max iterations reached
+        logger.warning(
+            "DuckDB scripting loop reached max iterations (%d), results may be incomplete",
+            _SCRIPTING_LOOP_MAX_ITERATIONS,
+        )
 
     # Execute post-loop statements
     for stmt in split_fn(post_loop):
@@ -156,15 +192,12 @@ def execute_bq_scripting(
         if not stmt:
             continue
         stmt = substitute_vars(stmt, variables)
-        try:
-            result = conn.execute(stmt)
-            if result and result.description:
-                try:
-                    total_rows += len(result.fetchall())
-                except duckdb.InvalidInputException:
-                    pass
-        except Exception as e:
-            logger.debug("BQ scripting post-loop error: %s", e)
+        result = conn.execute(stmt)
+        if result and result.description:
+            try:
+                total_rows += len(result.fetchall())
+            except duckdb.InvalidInputException:
+                pass
 
     return total_rows
 
@@ -192,7 +225,7 @@ def _execute_linear(
                 r = conn.execute(f"SELECT {expr}")
                 variables[var_name] = r.fetchone()[0]
             except Exception as e:
-                logger.debug("SET %s eval failed: %s", var_name, e)
+                logger.warning("SET %s eval failed: %s", var_name, e)
             continue
         stmt = substitute_vars(stmt, variables)
         result = conn.execute(stmt)
@@ -205,15 +238,20 @@ def _execute_linear(
 
 
 def substitute_vars(sql: str, variables: dict[str, object]) -> str:
-    """Substitute variable references in SQL."""
+    """Substitute variable references in SQL.
+
+    Uses word-boundary matching to replace BQ scripting variables
+    with their values. Only used for local DuckDB scripting emulation.
+    """
     for var_name, value in variables.items():
         if value is None:
             replacement = "NULL"
         elif isinstance(value, str):
-            replacement = f"'{value}'"
+            # Escape single quotes to prevent SQL injection in local testing
+            replacement = f"'{value.replace(chr(39), chr(39)+chr(39))}'"
         else:
             replacement = str(value)
-        sql = re.sub(rf'\b{var_name}\b', replacement, sql)
+        sql = re.sub(rf'\b{re.escape(var_name)}\b', replacement, sql)
     return sql
 
 

@@ -1,10 +1,10 @@
 """Tests for the features SQL builder."""
 
 from bq_entity_resolution.sql.builders.features import (
-    EnrichmentJoin,
-    FeatureParams,
-    FeatureExpr,
     CustomJoin,
+    EnrichmentJoin,
+    FeatureExpr,
+    FeatureParams,
     TFColumn,
     build_features_sql,
     build_term_frequencies_sql,
@@ -150,8 +150,8 @@ def test_term_frequencies_multiple_columns():
 def test_features_returns_sql_expression():
     """Builder returns SQLExpression."""
     params = FeatureParams(
-        target_table="t",
-        source_tables=["s"],
+        target_table="p.d.target",
+        source_tables=["p.d.source"],
         source_columns=[],
         feature_expressions=[FeatureExpr("x", "1")],
     )

@@ -4,6 +4,8 @@ import math
 
 from bq_entity_resolution.sql.builders.comparison import (
     ComparisonDef as BuilderComparisonDef,
+)
+from bq_entity_resolution.sql.builders.comparison import (
     ComparisonLevel,
     FellegiSunterParams,
     SumScoringParams,

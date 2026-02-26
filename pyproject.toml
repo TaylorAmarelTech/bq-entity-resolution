@@ -34,13 +34,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "google-cloud-bigquery>=3.20.0",
-    "google-cloud-bigquery-storage>=2.24.0",
-    "pydantic>=2.5.0",
-    "pyyaml>=6.0",
-    "click>=8.1.0",
-    "structlog>=24.0.0",
-    "sqlglot>=20.0.0",
+    "google-cloud-bigquery>=3.20.0,<4.0.0",
+    "google-cloud-bigquery-storage>=2.24.0,<3.0.0",
+    "pydantic>=2.5.0,<3.0.0",
+    "pyyaml>=6.0,<7.0",
+    "click>=8.1.0,<9.0.0",
+    "structlog>=24.0.0,<26.0.0",
+    "sqlglot>=23.0.0,<26.0.0",
 ]
 
 [project.optional-dependencies]
@@ -49,10 +49,11 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.3.0",
     "mypy>=1.8",
+    "pip-audit>=2.7.0",
 ]
 local = [
-    "duckdb>=0.10.0",
-    "metaphone>=0.6",
+    "duckdb>=0.10.0,<2.0.0",
+    "metaphone>=0.6,<1.0",
 ]
 
 [project.urls]

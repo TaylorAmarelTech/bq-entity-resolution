@@ -41,10 +41,10 @@ class TestBuildEmbeddingsSql:
 
     def test_filters_null_and_empty_text(self):
         params = EmbeddingsParams(
-            target_table="t",
-            source_table="s",
+            target_table="p.d.target",
+            source_table="p.d.source",
             concat_expression="col",
-            model_name="m",
+            model_name="p.ml.model",
             dimensions=64,
         )
         sql = build_embeddings_sql(params).render()
@@ -53,10 +53,10 @@ class TestBuildEmbeddingsSql:
 
     def test_includes_entity_uid_join(self):
         params = EmbeddingsParams(
-            target_table="t",
-            source_table="s",
+            target_table="p.d.target",
+            source_table="p.d.source",
             concat_expression="col",
-            model_name="m",
+            model_name="p.ml.model",
             dimensions=64,
         )
         sql = build_embeddings_sql(params).render()
@@ -83,8 +83,8 @@ class TestBuildLshBucketsSql:
 
     def test_generates_correct_number_of_bucket_columns(self):
         params = LSHParams(
-            target_table="t",
-            embedding_table="e",
+            target_table="p.d.target",
+            embedding_table="p.d.embeddings",
             num_tables=3,
             num_functions=4,
             dimensions=64,
@@ -100,8 +100,8 @@ class TestBuildLshBucketsSql:
 
     def test_uses_farm_fingerprint_for_projections(self):
         params = LSHParams(
-            target_table="t",
-            embedding_table="e",
+            target_table="p.d.target",
+            embedding_table="p.d.embeddings",
             num_tables=2,
             num_functions=4,
             dimensions=64,
@@ -113,8 +113,8 @@ class TestBuildLshBucketsSql:
 
     def test_includes_dot_product_cte(self):
         params = LSHParams(
-            target_table="t",
-            embedding_table="e",
+            target_table="p.d.target",
+            embedding_table="p.d.embeddings",
             num_tables=2,
             num_functions=4,
             dimensions=64,
@@ -126,8 +126,8 @@ class TestBuildLshBucketsSql:
 
     def test_includes_signatures_cte(self):
         params = LSHParams(
-            target_table="t",
-            embedding_table="e",
+            target_table="p.d.target",
+            embedding_table="p.d.embeddings",
             num_tables=2,
             num_functions=4,
             dimensions=64,
@@ -140,8 +140,8 @@ class TestBuildLshBucketsSql:
 
     def test_custom_bucket_prefix(self):
         params = LSHParams(
-            target_table="t",
-            embedding_table="e",
+            target_table="p.d.target",
+            embedding_table="p.d.embeddings",
             num_tables=2,
             num_functions=4,
             dimensions=64,
@@ -154,8 +154,8 @@ class TestBuildLshBucketsSql:
 
     def test_dimension_variable_declared(self):
         params = LSHParams(
-            target_table="t",
-            embedding_table="e",
+            target_table="p.d.target",
+            embedding_table="p.d.embeddings",
             num_tables=2,
             num_functions=4,
             dimensions=128,

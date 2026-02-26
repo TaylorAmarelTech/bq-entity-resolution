@@ -78,36 +78,36 @@ def profile_cursors(
         from bq_entity_resolution.backends.bigquery import BigQueryBackend
         from bq_entity_resolution.clients.bigquery import BigQueryClient
 
-        bq_client = BigQueryClient(
+        with BigQueryClient(
             project=cfg.project.bq_project,
             location=cfg.project.bq_location,
-        )
-        backend = BigQueryBackend(bq_client)
-        profiler = CursorProfiler(backend)
+        ) as bq_client:
+            with BigQueryBackend(bq_client) as backend:
+                profiler = CursorProfiler(backend)
 
-        # Profile natural columns
-        natural_results = []
-        if candidate_list:
-            click.echo("Profiling natural columns...")
-            natural_results = profiler.profile(
-                table=source.table,
-                primary_cursor=primary_cursor,
-                candidate_columns=candidate_list,
-                batch_size=batch_size,
-            )
+                # Profile natural columns
+                natural_results = []
+                if candidate_list:
+                    click.echo("Profiling natural columns...")
+                    natural_results = profiler.profile(
+                        table=source.table,
+                        primary_cursor=primary_cursor,
+                        candidate_columns=candidate_list,
+                        batch_size=batch_size,
+                    )
 
-        # Profile hash cursor
-        click.echo("Profiling hash cursor...")
-        hash_results = profiler.profile_hash_cursor(
-            table=source.table,
-            hash_column=hc,
-            primary_cursor=primary_cursor,
-            batch_size=batch_size,
-        )
+                # Profile hash cursor
+                click.echo("Profiling hash cursor...")
+                hash_results = profiler.profile_hash_cursor(
+                    table=source.table,
+                    hash_column=hc,
+                    primary_cursor=primary_cursor,
+                    batch_size=batch_size,
+                )
 
-        # Print recommendation
-        click.echo("")
-        click.echo(profiler.recommend(natural_results, hash_results, batch_size))
+                # Print recommendation
+                click.echo("")
+                click.echo(profiler.recommend(natural_results, hash_results, batch_size))
 
     except Exception as e:
         logger.exception("Cursor profiling failed: %s", e)

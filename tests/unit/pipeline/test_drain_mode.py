@@ -6,11 +6,10 @@ auto-enable work correctly.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from bq_entity_resolution.backends.protocol import QueryResult
 from bq_entity_resolution.pipeline.pipeline import Pipeline
-
 
 # -- Mock backend --
 
@@ -84,9 +83,10 @@ def _make_config(drain_mode=False, drain_max_iterations=100):
         groups=[feat_group],
         blocking_keys=[bk1],
         composite_keys=[ck1],
+        entity_type_column=None,
     )
 
-    blocking_path = NS(keys=["bk_soundex"], lsh_keys=[], candidate_limit=0)
+    blocking_path = NS(keys=["bk_soundex"], lsh_keys=[], candidate_limit=0, bucket_size_limit=0)
     blocking_config = NS(paths=[blocking_path], cross_batch=False)
     comp1 = NS(
         name="name_exact", method="exact",
@@ -94,7 +94,10 @@ def _make_config(drain_mode=False, drain_max_iterations=100):
         weight=2.0, params=None, tf_enabled=False,
         tf_column="", tf_minimum_u=0.01, levels=[],
     )
-    threshold = NS(method="score", min_score=1.0, match_threshold=None, log_prior_odds=0.0)
+    threshold = NS(
+        method="score", min_score=1.0, match_threshold=None,
+        log_prior_odds=0.0, min_matching_comparisons=0,
+    )
     al = NS(enabled=False, queue_size=100, uncertainty_window=0.3)
     tier = NS(
         name="exact",
@@ -102,9 +105,11 @@ def _make_config(drain_mode=False, drain_max_iterations=100):
         comparisons=[comp1],
         threshold=threshold,
         hard_negatives=[],
+        hard_positives=[],
         soft_signals=[],
         active_learning=al,
         confidence=None,
+        score_banding=NS(enabled=False, bands=[]),
     )
 
     incremental = NS(
@@ -115,11 +120,26 @@ def _make_config(drain_mode=False, drain_max_iterations=100):
         enabled=True,
     )
 
-    canonical_selection = NS(method="completeness", source_priority=[])
+    canonical_selection = NS(
+        method="completeness",
+        source_priority=[],
+        field_strategies=[],
+        default_field_strategy="most_complete",
+    )
     clustering = NS(max_iterations=20)
+    audit_trail = NS(enabled=False)
+    recon_output = NS(
+        include_match_metadata=True,
+        entity_id_prefix="ent",
+        partition_column=None,
+        cluster_columns=[],
+        audit_trail=audit_trail,
+    )
     reconciliation = NS(
         canonical_selection=canonical_selection,
         clustering=clustering,
+        output=recon_output,
+        strategy="canonical",
     )
     output = NS(
         include_match_metadata=True,
@@ -138,17 +158,20 @@ def _make_config(drain_mode=False, drain_max_iterations=100):
     )
     scale = NS(checkpoint_enabled=False, max_bytes_billed=None)
     embeddings = NS(enabled=False)
+    execution = NS(skip_stages=[])
 
     config = NS(
         project=project,
         sources=[source],
         features=features_config,
+        feature_engineering=features_config,
         incremental=incremental,
         reconciliation=reconciliation,
         output=output,
         monitoring=monitoring,
         scale=scale,
         embeddings=embeddings,
+        execution=execution,
         link_type=None,
     )
 
@@ -158,6 +181,9 @@ def _make_config(drain_mode=False, drain_max_iterations=100):
 
     config.fq_table = fq_table
     config.enabled_tiers = lambda: [tier]
+    config.effective_hard_negatives = lambda t: list(t.hard_negatives)
+    config.effective_hard_positives = lambda t: list(t.hard_positives)
+    config.effective_soft_signals = lambda t: list(t.soft_signals)
 
     return config
 

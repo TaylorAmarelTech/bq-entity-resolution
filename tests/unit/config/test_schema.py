@@ -4,16 +4,14 @@ import pytest
 from pydantic import ValidationError
 
 from bq_entity_resolution.config.schema import (
-    BlockingKeyDef,
+    BlockingPathDef,
     ColumnMapping,
-    ComparisonDef,
     MatchingTierConfig,
     PipelineConfig,
     ProjectConfig,
     SourceConfig,
-    TierBlockingConfig,
-    BlockingPathDef,
     ThresholdConfig,
+    TierBlockingConfig,
 )
 
 

@@ -1,5 +1,7 @@
 """Tests for cluster quality metrics."""
 
+from datetime import UTC
+
 from bq_entity_resolution.config.schema import ClusterQualityConfig
 from bq_entity_resolution.sql.builders.clustering import (
     ClusterMetricsParams,
@@ -73,12 +75,13 @@ def test_monitoring_config_includes_cluster_quality(sample_config):
 
 def test_context_has_cluster_quality_field():
     """PipelineContext has cluster_quality attribute."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from bq_entity_resolution.pipeline.context import PipelineContext
 
     ctx = PipelineContext(
         run_id="test",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
         config=None,  # type: ignore
     )
     assert ctx.cluster_quality is None

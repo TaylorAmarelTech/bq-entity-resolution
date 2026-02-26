@@ -159,9 +159,9 @@ class WeightSensitivityAnalyzer:
             f"-- Weight impact analysis for tier '{tier.name}'",
             f"-- Current threshold: {threshold}",
             f"-- Total possible score: {total_weight}",
-            f"--",
-            f"-- For each comparison, shows match count change if weight is halved or doubled",
-            f"",
+            "--",
+            "-- For each comparison, shows match count change if weight is halved or doubled",
+            "",
         ]
 
         union_parts = []
@@ -179,12 +179,16 @@ class WeightSensitivityAnalyzer:
                 f"  '{safe_name}' AS comparison,\n"
                 f"  '{comp.method}' AS method,\n"
                 f"  {comp.weight} AS current_weight,\n"
-                f"  -- Matches lost if weight halved (pairs that were above threshold but drop below)\n"
-                f"  (SELECT COUNT(*) FROM `{mt}` WHERE total_score >= {threshold}\n"
-                f"   AND total_score - {delta_half} < {threshold}) AS matches_lost_if_halved,\n"
-                f"  -- Matches gained if weight doubled (pairs below threshold that rise above)\n"
-                f"  (SELECT COUNT(*) FROM `{mt}` WHERE total_score < {threshold}\n"
-                f"   AND total_score + {delta_double} >= {threshold}) AS matches_gained_if_doubled"
+                f"  -- Matches lost if weight halved\n"
+                f"  (SELECT COUNT(*) FROM `{mt}`\n"
+                f"   WHERE total_score >= {threshold}\n"
+                f"   AND total_score - {delta_half} < {threshold}"
+                f") AS matches_lost_if_halved,\n"
+                f"  -- Matches gained if weight doubled\n"
+                f"  (SELECT COUNT(*) FROM `{mt}`\n"
+                f"   WHERE total_score < {threshold}\n"
+                f"   AND total_score + {delta_double} >= {threshold}"
+                f") AS matches_gained_if_doubled"
             )
 
         lines.append("\nUNION ALL\n".join(union_parts))

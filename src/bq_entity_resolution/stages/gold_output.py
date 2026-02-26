@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.naming import (
     all_matches_table,
-    cluster_table as _cluster_table,
     featured_table,
     resolved_table,
+)
+from bq_entity_resolution.naming import (
+    cluster_table as _cluster_table,
 )
 from bq_entity_resolution.sql.builders.gold_output import (
     GoldOutputParams,
@@ -18,6 +21,8 @@ from bq_entity_resolution.sql.builders.gold_output import (
 from bq_entity_resolution.sql.builders.golden_record import FieldStrategy
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, TableRef
+
+logger = logging.getLogger(__name__)
 
 
 class GoldOutputStage(Stage):
@@ -60,58 +65,51 @@ class GoldOutputStage(Stage):
 
     def plan(self, **kwargs: Any) -> list[SQLExpression]:
         """Generate gold output SQL."""
+        logger.debug("Planning %s stage", self.__class__.__name__)
         recon = self._config.reconciliation
-        output = getattr(self._config, "output", None) or getattr(recon, "output", None)
+        output = recon.output
+        canonical = recon.canonical_selection
 
-        # Collect scoring columns for completeness method
+        # Collect source columns and passthrough columns
         scoring_cols: list[str] = []
         source_cols: list[str] = []
+        passthrough_cols: list[str] = []
         for source in self._config.sources:
             for col in source.columns:
                 if col.name not in source_cols:
                     source_cols.append(col.name)
                     scoring_cols.append(col.name)
-
-        canonical_method = getattr(
-            recon.canonical_selection, "method", "completeness"
-        )
-        source_priority = getattr(
-            recon.canonical_selection, "source_priority", []
-        )
+            for pt in source.passthrough_columns:
+                if pt not in passthrough_cols:
+                    passthrough_cols.append(pt)
 
         # Field-level merge strategies
-        field_strategies = []
-        for fs in getattr(recon.canonical_selection, "field_strategies", []):
-            field_strategies.append(FieldStrategy(
+        field_strategies = [
+            FieldStrategy(
                 column=fs.column,
                 strategy=fs.strategy,
                 source_priority=fs.source_priority,
-            ))
-        default_field_strategy = getattr(
-            recon.canonical_selection, "default_field_strategy", "most_complete"
-        )
-
-        # Reconciliation strategy for match deduplication
-        reconciliation_strategy = getattr(recon, "strategy", "tier_priority")
+            )
+            for fs in canonical.field_strategies
+        ]
 
         params = GoldOutputParams(
             target_table=self.outputs["gold"].fq_name,
             source_table=self.inputs["featured"].fq_name,
             cluster_table=self.inputs["clusters"].fq_name,
             matches_table=self.inputs["all_matches"].fq_name,
-            canonical_method=canonical_method,
+            canonical_method=canonical.method,
             scoring_columns=scoring_cols,
             source_columns=source_cols,
-            include_match_metadata=getattr(
-                output, "include_match_metadata", True
-            ),
-            entity_id_prefix=getattr(output, "entity_id_prefix", "ent"),
-            partition_column=getattr(output, "partition_column", None),
-            cluster_columns=getattr(output, "cluster_columns", []),
-            source_priority=source_priority,
+            passthrough_columns=passthrough_cols,
+            include_match_metadata=output.include_match_metadata,
+            entity_id_prefix=output.entity_id_prefix,
+            partition_column=output.partition_column,
+            cluster_columns=output.cluster_columns,
+            source_priority=canonical.source_priority,
             field_strategies=field_strategies,
-            default_field_strategy=default_field_strategy,
-            reconciliation_strategy=reconciliation_strategy,
+            default_field_strategy=canonical.default_field_strategy,
+            reconciliation_strategy=recon.strategy,
         )
 
         return [build_gold_output_sql(params)]

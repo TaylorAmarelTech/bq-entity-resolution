@@ -13,6 +13,8 @@ from bq_entity_resolution.backends.duckdb import DuckDBBackend
 from bq_entity_resolution.matching.comparisons import COMPARISON_COSTS, COMPARISON_FUNCTIONS
 from bq_entity_resolution.sql.builders.comparison import (
     ComparisonDef as BuilderComparisonDef,
+)
+from bq_entity_resolution.sql.builders.comparison import (
     SumScoringParams,
     Threshold,
     build_sum_scoring_sql,

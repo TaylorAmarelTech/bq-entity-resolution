@@ -5,10 +5,8 @@ Validates that the stage produces correct SQL for:
 - Subsequent tiers (INSERT INTO with dedup)
 """
 
-import pytest
 
 from bq_entity_resolution.stages.match_accumulation import MatchAccumulationStage
-
 
 # -- Minimal config fixture --
 

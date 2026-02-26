@@ -2,9 +2,9 @@
 
 from bq_entity_resolution.pipeline.diagnostics import (
     Diagnosis,
+    diagnose_cluster_explosion,
     diagnose_empty_blocking,
     diagnose_empty_matches,
-    diagnose_cluster_explosion,
 )
 
 

@@ -84,7 +84,7 @@ feature_engineering:
   #   matched_address STRING -- Census-standardized address
   #   latitude     FLOAT64
   #   longitude    FLOAT64
-  #   census_tract STRING  -- 11-digit FIPS tract code (e.g. "36061002300")
+  #   tract        STRING  -- 11-digit FIPS tract code (e.g. "36061002300")
   #   county_fips  STRING  -- 5-digit county FIPS (e.g. "36061")
   #   match_type   STRING  -- "Exact", "Non_Exact", "No_Match"
   enrichment_joins:
@@ -97,7 +97,7 @@ feature_engineering:
         - "matched_address"
         - "latitude"
         - "longitude"
-        - "census_tract"
+        - "tract"
         - "county_fips"
         - "match_type"
       column_prefix: "census_"

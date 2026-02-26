@@ -59,7 +59,7 @@ def describe(config: str, defaults: str | None) -> None:
         if hasattr(fe, "blocking_keys"):
             all_bk = fe.blocking_keys
 
-        click.echo(f"Feature Engineering:")
+        click.echo("Feature Engineering:")
         click.echo(f"  Features: {len(all_features)}")
         for feat in all_features[:6]:
             click.echo(f"    - {feat.name} ({feat.function})")
