@@ -133,6 +133,62 @@ class FeatureEngineeringStage(Stage):
                     "inputs": inputs,
                 })
 
+        # Auto-inject placeholder detection flag features when enabled
+        ph = getattr(fc, "placeholder", None)
+        if ph and getattr(ph, "enabled", False):
+            # Map column roles to detection function names
+            role_to_domain: dict[str, str] = {
+                "phone": "is_placeholder_phone",
+                "mobile_phone": "is_placeholder_phone",
+                "home_phone": "is_placeholder_phone",
+                "work_phone": "is_placeholder_phone",
+                "email": "is_placeholder_email",
+                "personal_email": "is_placeholder_email",
+                "work_email": "is_placeholder_email",
+                "first_name": "is_placeholder_name",
+                "last_name": "is_placeholder_name",
+                "middle_name": "is_placeholder_name",
+                "full_name": "is_placeholder_name",
+                "address_line_1": "is_placeholder_address",
+                "address_line_2": "is_placeholder_address",
+                "ssn": "is_placeholder_ssn",
+                "tin": "is_placeholder_ssn",
+            }
+            domain_enabled: dict[str, bool] = {
+                "is_placeholder_phone": getattr(ph, "detect_phone", True),
+                "is_placeholder_email": getattr(ph, "detect_email", True),
+                "is_placeholder_name": getattr(ph, "detect_name", True),
+                "is_placeholder_address": getattr(ph, "detect_address", True),
+                "is_placeholder_ssn": getattr(ph, "detect_ssn", True),
+            }
+            injected_flags: set[str] = set()
+            for source in config.sources:
+                for col in source.columns:
+                    role = getattr(col, "role", "")
+                    fn_name = role_to_domain.get(role)
+                    if not fn_name or not domain_enabled.get(fn_name, True):
+                        continue
+                    feat_name = f"{fn_name}_{col.name}"
+                    if feat_name in injected_flags:
+                        continue
+                    func = FEATURE_FUNCTIONS.get(fn_name)
+                    if func is None:
+                        continue
+                    try:
+                        expression = func([col.name])
+                    except Exception as exc:
+                        logger.warning(
+                            "Skipping placeholder flag '%s': %s",
+                            feat_name, exc,
+                        )
+                        continue
+                    all_features.append({
+                        "name": feat_name,
+                        "expression": expression,
+                        "inputs": [col.name],
+                    })
+                    injected_flags.add(feat_name)
+
         # Auto-inject compound detection features when enabled
         cd = getattr(fc, "compound_detection", None)
         if cd and getattr(cd, "enabled", False):
@@ -168,6 +224,56 @@ class FeatureEngineeringStage(Stage):
             else:
                 pass1.append(FeatureExpr(f["name"], f["expression"]))
 
+        # Auto-nullify blocking key inputs for placeholder prevention
+        _nullify_substitutions: dict[str, str] = {}
+        if (
+            ph
+            and getattr(ph, "enabled", False)
+            and getattr(ph, "auto_nullify_blocking_inputs", True)
+        ):
+            role_to_nullify: dict[str, str] = {
+                "phone": "nullify_placeholder_phone",
+                "mobile_phone": "nullify_placeholder_phone",
+                "home_phone": "nullify_placeholder_phone",
+                "work_phone": "nullify_placeholder_phone",
+                "email": "nullify_placeholder_email",
+                "personal_email": "nullify_placeholder_email",
+                "work_email": "nullify_placeholder_email",
+            }
+            # Build a map of source column name → role
+            col_roles: dict[str, str] = {}
+            for source in config.sources:
+                for col in source.columns:
+                    role = getattr(col, "role", "")
+                    if role:
+                        col_roles[col.name] = role
+
+            # For each blocking key input, if it matches a nullifiable role,
+            # inject a safe version and record the substitution
+            for bk in fc.blocking_keys:
+                bk_inputs = bk.inputs if isinstance(bk.inputs, list) else [bk.inputs]
+                for inp in bk_inputs:
+                    if inp in _nullify_substitutions:
+                        continue  # Already handled
+                    role = col_roles.get(inp, "")
+                    nullify_fn = role_to_nullify.get(role)
+                    if not nullify_fn:
+                        continue
+                    func = FEATURE_FUNCTIONS.get(nullify_fn)
+                    if func is None:
+                        continue
+                    safe_name = f"{inp}_safe"
+                    try:
+                        expression = func([inp])
+                    except Exception as exc:
+                        logger.warning(
+                            "Skipping nullify for blocking input '%s': %s",
+                            inp, exc,
+                        )
+                        continue
+                    pass1.append(FeatureExpr(safe_name, expression))
+                    _nullify_substitutions[inp] = safe_name
+
         # Blocking keys
         blocking_keys = []
         for bk in fc.blocking_keys:
@@ -175,6 +281,8 @@ class FeatureEngineeringStage(Stage):
             if func is None:
                 continue
             inputs = bk.inputs if isinstance(bk.inputs, list) else [bk.inputs]
+            # Apply placeholder nullification substitutions
+            inputs = [_nullify_substitutions.get(i, i) for i in inputs]
             params = getattr(bk, "params", None) or {}
             try:
                 expression = func(inputs, **params)

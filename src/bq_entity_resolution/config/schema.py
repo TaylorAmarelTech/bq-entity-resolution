@@ -32,6 +32,8 @@ __all__ = [
     "CompositeKeyDef",
     "EnrichmentJoinConfig",
     "CompoundDetectionConfig",
+    "PlaceholderPatternDef",
+    "PlaceholderConfig",
     "FeatureEngineeringConfig",
     # blocking
     "BlockingPathDef",
@@ -69,6 +71,8 @@ __all__ = [
     "ProfilingConfig",
     "BlockingMetricsConfig",
     "ClusterQualityConfig",
+    "JobTrackingConfig",
+    "PlaceholderTrackingConfig",
     "MonitoringConfig",
     "ScaleConfig",
     "ExecutionConfig",

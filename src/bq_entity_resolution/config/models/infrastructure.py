@@ -23,6 +23,8 @@ __all__ = [
     "ProfilingConfig",
     "BlockingMetricsConfig",
     "ClusterQualityConfig",
+    "JobTrackingConfig",
+    "PlaceholderTrackingConfig",
     "MonitoringConfig",
     "ScaleConfig",
     "ExecutionConfig",
@@ -364,6 +366,41 @@ class ClusterQualityConfig(BaseModel):
         return v
 
 
+class JobTrackingConfig(BaseModel):
+    """Per-query BigQuery job metadata tracking.
+
+    When enabled, persists job details (bytes_billed, slot_milliseconds,
+    duration, job_id) for every query executed by the pipeline to a
+    ``pipeline_job_details`` table in the metadata dataset.
+
+    Use for cost monitoring, performance analysis, and capacity planning.
+    """
+
+    enabled: bool = False
+
+
+class PlaceholderTrackingConfig(BaseModel):
+    """Placeholder value detection logging.
+
+    When enabled, scans featured data for suspected placeholder values
+    and logs them to a ``placeholder_detection_log`` table for data
+    quality monitoring over time.
+
+    ``min_count`` filters out rare values — only values appearing at
+    least this many times are reported.
+    """
+
+    enabled: bool = False
+    min_count: int = 2
+
+    @field_validator("min_count")
+    @classmethod
+    def _positive_min_count(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("min_count must be >= 1")
+        return v
+
+
 class MonitoringConfig(BaseModel):
     """Observability configuration."""
 
@@ -373,6 +410,10 @@ class MonitoringConfig(BaseModel):
     profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)
     blocking_metrics: BlockingMetricsConfig = Field(default_factory=BlockingMetricsConfig)
     cluster_quality: ClusterQualityConfig = Field(default_factory=ClusterQualityConfig)
+    job_tracking: JobTrackingConfig = Field(default_factory=JobTrackingConfig)
+    placeholder_tracking: PlaceholderTrackingConfig = Field(
+        default_factory=PlaceholderTrackingConfig
+    )
     persist_sql_log: bool = False  # Write sql_log to BQ table after run
 
 

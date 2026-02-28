@@ -264,3 +264,32 @@ def fingerprint_column(suffix: str) -> str:
     Example: fingerprint_column("policy_number") -> "fp_policy_number"
     """
     return f"{PREFIX_FINGERPRINT}{suffix}"
+
+
+# ---------------------------------------------------------------------------
+# Job Tracking
+# ---------------------------------------------------------------------------
+
+JOB_TRACKING_RUN_ID = "run_id"
+JOB_TRACKING_STAGE_NAME = "stage_name"
+JOB_TRACKING_QUERY_INDEX = "query_index"
+JOB_TRACKING_JOB_ID = "job_id"
+JOB_TRACKING_BYTES_BILLED = "bytes_billed"
+JOB_TRACKING_TOTAL_BYTES_PROCESSED = "total_bytes_processed"
+JOB_TRACKING_SLOT_MILLISECONDS = "slot_milliseconds"
+JOB_TRACKING_DURATION_SECONDS = "duration_seconds"
+JOB_TRACKING_ROWS_AFFECTED = "rows_affected"
+JOB_TRACKING_STARTED_AT = "started_at"
+JOB_TRACKING_SQL_HASH = "sql_hash"
+
+# ---------------------------------------------------------------------------
+# Placeholder Tracking
+# ---------------------------------------------------------------------------
+
+PLACEHOLDER_RUN_ID = "run_id"
+PLACEHOLDER_SOURCE_NAME = "source_name"
+PLACEHOLDER_COLUMN_NAME = "column_name"
+PLACEHOLDER_VALUE = "placeholder_value"
+PLACEHOLDER_MATCH_COUNT = "match_count"
+PLACEHOLDER_PATTERN_TYPE = "pattern_type"
+PLACEHOLDER_DETECTED_AT = "detected_at"

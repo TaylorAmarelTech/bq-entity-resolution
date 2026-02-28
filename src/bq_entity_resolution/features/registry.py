@@ -155,5 +155,6 @@ import bq_entity_resolution.features.industry_features  # noqa: E402, F401
 import bq_entity_resolution.features.name_features  # noqa: E402, F401
 import bq_entity_resolution.features.negative_features  # noqa: E402, F401
 import bq_entity_resolution.features.phonetic_features  # noqa: E402, F401
+import bq_entity_resolution.features.placeholder_features  # noqa: E402, F401
 import bq_entity_resolution.features.utility_features  # noqa: E402, F401
 import bq_entity_resolution.features.zip_features  # noqa: E402, F401

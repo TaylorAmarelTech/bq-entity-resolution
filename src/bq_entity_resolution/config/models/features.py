@@ -27,6 +27,8 @@ __all__ = [
     "CompositeKeyDef",
     "EnrichmentJoinConfig",
     "CompoundDetectionConfig",
+    "PlaceholderPatternDef",
+    "PlaceholderConfig",
     "FeatureEngineeringConfig",
 ]
 
@@ -227,6 +229,51 @@ class CompoundDetectionConfig(BaseModel):
         return v
 
 
+class PlaceholderPatternDef(BaseModel):
+    """A custom placeholder pattern for sentinel value detection.
+
+    Defines exact-match values and/or a regex pattern that should be
+    treated as placeholder (non-informative) data. Values are compared
+    in UPPER case.
+    """
+
+    name: str
+    values: list[str] = Field(default_factory=list)
+    regex: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        validate_identifier(v, context="placeholder pattern name")
+        return v
+
+
+class PlaceholderConfig(BaseModel):
+    """Placeholder/sentinel value detection and nullification.
+
+    When enabled, automatically injects feature functions that detect
+    and optionally nullify common placeholder values (e.g., phone
+    "9999999999", email "noemail@email.com", name "UNKNOWN") to
+    prevent cartesian explosions in blocking.
+
+    ``auto_nullify_blocking_inputs`` wraps blocking key input columns
+    with nullification functions so placeholder values hash to NULL
+    and are excluded from candidate pair generation via existing
+    IS NOT NULL conditions in blocking SQL.
+    """
+
+    enabled: bool = False
+    auto_nullify_blocking_inputs: bool = True
+    detect_phone: bool = True
+    detect_email: bool = True
+    detect_name: bool = True
+    detect_address: bool = True
+    detect_ssn: bool = True
+    custom_patterns: dict[str, PlaceholderPatternDef] = Field(default_factory=dict)
+
+
 class FeatureEngineeringConfig(BaseModel):
     """All feature engineering configuration."""
 
@@ -241,6 +288,7 @@ class FeatureEngineeringConfig(BaseModel):
     compound_detection: CompoundDetectionConfig = Field(
         default_factory=CompoundDetectionConfig
     )
+    placeholder: PlaceholderConfig = Field(default_factory=PlaceholderConfig)
     entity_type_column: str = ""  # Feature column for entity type gating
 
     @field_validator("entity_type_column")

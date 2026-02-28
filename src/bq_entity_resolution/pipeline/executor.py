@@ -20,6 +20,12 @@ from typing import Any, Protocol
 
 from bq_entity_resolution.backends.protocol import Backend
 from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
+from bq_entity_resolution.sql.builders.job_tracking import (
+    JobDetail,
+    build_create_job_tracking_table_sql,
+    build_insert_job_details_sql,
+    compute_sql_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +192,8 @@ class PipelineExecutor:
         health_probe: Any | None = None,
         fencing_kwargs: dict[str, Any] | None = None,
         redact_sql_logs: bool = True,
+        job_tracking_table: str | None = None,
+        job_tracking_enabled: bool = False,
     ):
         self.backend = backend
         self.quality_gates = quality_gates or []
@@ -199,6 +207,9 @@ class PipelineExecutor:
         # has no effect: _redact_sql() is applied unconditionally.
         self._redact_sql_logs = redact_sql_logs
         self._checkpoint_failures = 0
+        self._job_tracking_table = job_tracking_table
+        self._job_tracking_enabled = job_tracking_enabled
+        self._job_details: list[JobDetail] = []
 
     def execute(
         self,
@@ -334,6 +345,9 @@ class PipelineExecutor:
 
             result.status = "success"
 
+            # Persist job tracking details
+            self._persist_job_details(run_id)
+
             # Mark entire run as complete in checkpoint
             if self._checkpoint:
                 try:
@@ -425,6 +439,25 @@ class PipelineExecutor:
 
                 pipeline_result.sql_log.append(log_entry)
 
+                # Collect job detail for job tracking persistence
+                if self._job_tracking_enabled:
+                    self._job_details.append(JobDetail(
+                        stage_name=stage_plan.stage_name,
+                        query_index=len(self._job_details),
+                        job_id=getattr(query_result, "job_id", "") or "",
+                        bytes_billed=query_result.bytes_billed,
+                        total_bytes_processed=getattr(
+                            query_result, "total_bytes_processed", 0
+                        ),
+                        slot_milliseconds=getattr(
+                            query_result, "slot_milliseconds", 0
+                        ),
+                        duration_seconds=round(query_duration, 4),
+                        rows_affected=query_result.rows_affected,
+                        started_at=log_entry["timestamp"],
+                        sql_hash=compute_sql_hash(sql),
+                    ))
+
                 stage_result.rows_affected += query_result.rows_affected
 
                 # Per-SQL health probe heartbeat so K8s doesn't
@@ -499,6 +532,48 @@ class PipelineExecutor:
                     "Progress callback failed for stage '%s'",
                     stage_name, exc_info=True,
                 )
+
+    def _persist_job_details(self, run_id: str) -> None:
+        """Persist collected job details to tracking table.
+
+        Wrapped in try/except so tracking failure doesn't crash the pipeline.
+        """
+        if not self._job_tracking_enabled or not self._job_details:
+            return
+        if not self._job_tracking_table:
+            logger.warning(
+                "Job tracking enabled but no table configured — skipping"
+            )
+            return
+
+        try:
+            # Create table if not exists
+            create_sql = build_create_job_tracking_table_sql(
+                self._job_tracking_table
+            )
+            self.backend.execute(
+                create_sql.render(), label="job_tracking_create"
+            )
+
+            # Insert all collected details
+            insert_sql = build_insert_job_details_sql(
+                self._job_tracking_table, run_id, self._job_details
+            )
+            self.backend.execute(
+                insert_sql.render(), label="job_tracking_insert"
+            )
+
+            logger.info(
+                "Persisted %d job details to %s",
+                len(self._job_details),
+                self._job_tracking_table,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist job tracking details — pipeline "
+                "completed successfully but job metadata was not saved",
+                exc_info=True,
+            )
 
     @staticmethod
     def _generate_run_id() -> str:

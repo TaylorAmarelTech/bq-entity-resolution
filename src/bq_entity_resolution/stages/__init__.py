@@ -25,6 +25,7 @@ from bq_entity_resolution.stages.gold_output import GoldOutputStage
 from bq_entity_resolution.stages.label_ingestion import LabelIngestionStage
 from bq_entity_resolution.stages.match_accumulation import MatchAccumulationStage
 from bq_entity_resolution.stages.matching import MatchingStage
+from bq_entity_resolution.stages.placeholder_detection import PlaceholderDetectionStage
 from bq_entity_resolution.stages.staging import StagingStage
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "BQMLTrainingStage",
     "BQMLPredictStage",
     "BQMLEvaluateStage",
+    "PlaceholderDetectionStage",
 ]

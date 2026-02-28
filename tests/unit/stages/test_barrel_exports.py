@@ -24,6 +24,7 @@ EXPECTED_STAGES = [
     "BQMLTrainingStage",
     "BQMLPredictStage",
     "BQMLEvaluateStage",
+    "PlaceholderDetectionStage",
 ]
 
 

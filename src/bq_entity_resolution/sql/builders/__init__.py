@@ -60,7 +60,19 @@ from bq_entity_resolution.sql.builders.golden_record import (
     GoldenRecordParams,
     build_golden_record_cte,
 )
+from bq_entity_resolution.sql.builders.job_tracking import (
+    JobDetail,
+    build_create_job_tracking_table_sql,
+    build_insert_job_details_sql,
+    compute_sql_hash,
+)
 from bq_entity_resolution.sql.builders.monitoring import build_persist_sql_log_sql
+from bq_entity_resolution.sql.builders.placeholder_tracking import (
+    PlaceholderScanColumn,
+    PlaceholderScanParams,
+    build_create_placeholder_table_sql,
+    build_placeholder_scan_sql,
+)
 from bq_entity_resolution.sql.builders.staging import StagingParams, build_staging_sql
 from bq_entity_resolution.sql.builders.udf import build_jaro_winkler_udf_sql
 from bq_entity_resolution.sql.builders.watermark import (
@@ -127,4 +139,14 @@ __all__ = [
     "build_jaro_winkler_udf_sql",
     # Monitoring
     "build_persist_sql_log_sql",
+    # Job Tracking
+    "build_create_job_tracking_table_sql",
+    "build_insert_job_details_sql",
+    "compute_sql_hash",
+    "JobDetail",
+    # Placeholder Tracking
+    "build_create_placeholder_table_sql",
+    "build_placeholder_scan_sql",
+    "PlaceholderScanColumn",
+    "PlaceholderScanParams",
 ]

@@ -100,3 +100,15 @@ def checkpoint_table(config: PipelineConfig) -> str:
     """Meta layer pipeline checkpoint table."""
     p = config.project
     return f"{p.bq_project}.{p.watermark_dataset}.pipeline_checkpoints"
+
+
+def job_tracking_table(config: PipelineConfig) -> str:
+    """Meta layer pipeline job details tracking table."""
+    p = config.project
+    return f"{p.bq_project}.{p.watermark_dataset}.pipeline_job_details"
+
+
+def placeholder_detection_table(config: PipelineConfig) -> str:
+    """Meta layer placeholder detection log table."""
+    p = config.project
+    return f"{p.bq_project}.{p.watermark_dataset}.placeholder_detection_log"

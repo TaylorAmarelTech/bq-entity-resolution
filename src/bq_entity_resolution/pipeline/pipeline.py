@@ -299,6 +299,14 @@ class Pipeline:
             health_probe: Optional health probe for K8s liveness updates.
             fencing_kwargs: Optional fencing params for checkpoint writes.
         """
+        # Job tracking config
+        jt = getattr(self._config.monitoring, "job_tracking", None)
+        jt_enabled = bool(jt and getattr(jt, "enabled", False))
+        jt_table: str | None = None
+        if jt_enabled:
+            from bq_entity_resolution.naming import job_tracking_table
+            jt_table = job_tracking_table(self._config)
+
         executor = PipelineExecutor(
             backend=backend,
             quality_gates=self._gates,
@@ -307,6 +315,8 @@ class Pipeline:
             max_cost_bytes=max_cost_bytes,
             health_probe=health_probe,
             fencing_kwargs=fencing_kwargs,
+            job_tracking_table=jt_table,
+            job_tracking_enabled=jt_enabled,
         )
         return executor.execute(
             plan,

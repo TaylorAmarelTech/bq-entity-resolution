@@ -22,6 +22,7 @@ from bq_entity_resolution.stages.features import (
 from bq_entity_resolution.stages.label_ingestion import LabelIngestionStage
 from bq_entity_resolution.stages.match_accumulation import MatchAccumulationStage
 from bq_entity_resolution.stages.matching import MatchingStage
+from bq_entity_resolution.stages.placeholder_detection import PlaceholderDetectionStage
 from bq_entity_resolution.stages.reconciliation import (
     CanonicalIndexInitStage,
     CanonicalIndexPopulateStage,
@@ -262,6 +263,11 @@ def build_pipeline_dag(
     # 8. Cluster quality (optional monitoring)
     if getattr(config.monitoring.cluster_quality, "enabled", False):
         stages.append(ClusterQualityStage(config))
+
+    # 9. Placeholder detection (optional data quality monitoring)
+    pt = getattr(config.monitoring, "placeholder_tracking", None)
+    if pt and getattr(pt, "enabled", False):
+        stages.append(PlaceholderDetectionStage(config))
 
     # Apply stage overrides (replace built-in stages by name)
     if stage_overrides:
