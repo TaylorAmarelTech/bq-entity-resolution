@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import difflib
 
-from bq_entity_resolution.config.schema import PipelineConfig
+from bq_entity_resolution.config.schema import PipelineConfig, SourceConfig
 from bq_entity_resolution.exceptions import ConfigurationError
 
 
@@ -83,15 +83,15 @@ def validate_feature_inputs_exist(config: PipelineConfig) -> None:
     """Ensure feature function inputs reference known source columns or prior features."""
     source_cols = set()
     for source in config.sources:
-        for col in source.columns:
-            source_cols.add(col.name)
+        for cm in source.columns:
+            source_cols.add(cm.name)
 
     defined: set[str] = set(source_cols)
 
     # Add enrichment join output columns (available after feature engineering CTE)
     for ej in config.feature_engineering.enrichment_joins:
-        for col in ej.columns:
-            defined.add(f"{ej.column_prefix}{col}")
+        for ej_col in ej.columns:
+            defined.add(f"{ej.column_prefix}{ej_col}")
         if ej.match_flag:
             defined.add(ej.match_flag)
 
@@ -291,20 +291,20 @@ def validate_tf_columns_exist(config: PipelineConfig) -> None:
     """Ensure TF adjustment columns reference known features or source columns."""
     known: set[str] = set()
     for source in config.sources:
-        for col in source.columns:
-            known.add(col.name)
+        for cm in source.columns:
+            known.add(cm.name)
     known |= config.feature_engineering.all_feature_names()
 
     errors: list[str] = []
     for tier in config.enabled_tiers():
         for comp in tier.comparisons:
             if comp.tf_adjustment and comp.tf_adjustment.enabled:
-                col = comp.tf_adjustment.tf_adjustment_column or comp.left
-                if col not in known:
-                    suggestion = _suggest_closest(col, known)
+                tf_col = comp.tf_adjustment.tf_adjustment_column or comp.left
+                if tf_col not in known:
+                    suggestion = _suggest_closest(tf_col, known)
                     errors.append(
                         f"Tier '{tier.name}' comparison '{comp.left}/{comp.right}': "
-                        f"tf_adjustment_column '{col}' not found in features or "
+                        f"tf_adjustment_column '{tf_col}' not found in features or "
                         f"source columns.{suggestion}"
                     )
 
@@ -328,7 +328,7 @@ def validate_source_schema_alignment(config: PipelineConfig) -> None:
     if len(config.sources) < 2:
         return
 
-    def _feature_column_names(source):
+    def _feature_column_names(source: SourceConfig) -> set[str]:
         """Column names excluding system columns (unique_key, updated_at)."""
         system_cols = {source.unique_key, source.updated_at}
         return {c.name for c in source.columns if c.name not in system_cols}
@@ -936,16 +936,16 @@ def validate_embedding_source_columns(config: PipelineConfig) -> None:
 
     known: set[str] = set()
     for source in config.sources:
-        for col in source.columns:
-            known.add(col.name)
+        for cm in source.columns:
+            known.add(cm.name)
     known |= config.feature_engineering.all_feature_names()
 
     errors: list[str] = []
-    for col in emb.source_columns:
-        if col not in known:
-            suggestion = _suggest_closest(col, known)
+    for emb_col in emb.source_columns:
+        if emb_col not in known:
+            suggestion = _suggest_closest(emb_col, known)
             errors.append(
-                f"Embedding source_column '{col}' not found in features "
+                f"Embedding source_column '{emb_col}' not found in features "
                 f"or source columns.{suggestion}"
             )
 
@@ -964,18 +964,18 @@ def validate_hash_cursor_column(config: PipelineConfig) -> None:
 
     known: set[str] = set()
     for source in config.sources:
-        for col in source.columns:
-            known.add(col.name)
+        for cm in source.columns:
+            known.add(cm.name)
         known.add(source.unique_key)
         known.add(source.updated_at)
     # entity_uid is the default and always valid after staging
     known.add("entity_uid")
 
-    col = inc.hash_cursor.column
-    if col not in known:
-        suggestion = _suggest_closest(col, known)
+    hc_col = inc.hash_cursor.column
+    if hc_col not in known:
+        suggestion = _suggest_closest(hc_col, known)
         raise ConfigurationError(
-            f"Hash cursor column '{col}' not found in source columns.{suggestion}"
+            f"Hash cursor column '{hc_col}' not found in source columns.{suggestion}"
         )
 
 
@@ -1071,19 +1071,19 @@ def validate_golden_record_columns(config: PipelineConfig) -> None:
 
     known: set[str] = set()
     for source in config.sources:
-        for col in source.columns:
-            known.add(col.name)
+        for cm in source.columns:
+            known.add(cm.name)
         known.update(source.passthrough_columns)
     known |= config.feature_engineering.all_feature_names()
     # System columns
     known.update({"entity_uid", "cluster_id", "source_name", "source_updated_at"})
 
     errors: list[str] = []
-    for col in output.cluster_columns:
-        if col not in known:
-            suggestion = _suggest_closest(col, known)
+    for out_col in output.cluster_columns:
+        if out_col not in known:
+            suggestion = _suggest_closest(out_col, known)
             errors.append(
-                f"Output cluster_column '{col}' not found in features "
+                f"Output cluster_column '{out_col}' not found in features "
                 f"or source columns.{suggestion}"
             )
 

@@ -50,6 +50,6 @@ def test_retry_delay_constant():
 
 
 def test_execute_and_fetch_returns_list():
-    """execute_and_fetch return annotation is list[dict]."""
+    """execute_and_fetch return annotation is list[dict[str, Any]]."""
     hints = inspect.get_annotations(BigQueryClient.execute_and_fetch)
-    assert hints.get("return") == "list[dict]"
+    assert hints.get("return") == "list[dict[str, Any]]"

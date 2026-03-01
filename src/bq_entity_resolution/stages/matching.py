@@ -416,7 +416,7 @@ class MatchingStage(Stage):
         from bq_entity_resolution.sql.utils import validate_identifier
 
         if getattr(hn, "sql", None):
-            return hn.sql
+            return str(hn.sql)
         left = hn.left
         right = getattr(hn, "right", None) or left
         method = hn.method
@@ -445,7 +445,7 @@ class MatchingStage(Stage):
         from bq_entity_resolution.sql.utils import validate_identifier
 
         if getattr(signal, "sql", None):
-            return signal.sql
+            return str(signal.sql)
         left = signal.left
         right = getattr(signal, "right", None) or left
         method = signal.method

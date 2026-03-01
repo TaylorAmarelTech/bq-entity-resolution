@@ -20,7 +20,7 @@ from bq_entity_resolution.sql.utils import sql_escape
 def build_persist_sql_log_sql(
     audit_table: str,
     run_id: str,
-    entries: list[dict],
+    entries: list[dict[str, str]],
 ) -> SQLExpression:
     """Build SQL to persist pipeline SQL audit trail.
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from bq_entity_resolution.config.schema import (
     MatchingTierConfig,
@@ -57,7 +58,7 @@ class ComparisonParameters:
     """Estimated m/u per level for one comparison."""
 
     comparison_name: str
-    levels: list[dict] = field(default_factory=list)
+    levels: list[dict[str, Any]] = field(default_factory=list)
     # Each dict: {"label": str, "m": float, "u": float}
 
 
@@ -173,13 +174,13 @@ class ParameterEstimator:
         return build_em_estimation_sql(params).render()
 
     def parse_estimation_results(
-        self, tier: MatchingTierConfig, rows: list[dict]
+        self, tier: MatchingTierConfig, rows: list[dict[str, Any]]
     ) -> TierParameters:
         """Parse BigQuery result rows into TierParameters.
 
         Expected row format: {comparison_name, level_label, m_probability, u_probability}
         """
-        comp_map: dict[str, list[dict]] = {}
+        comp_map: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             name = row["comparison_name"]
             if name not in comp_map:
@@ -224,7 +225,7 @@ class ParameterEstimator:
         )
         return build_estimate_from_labels_sql(params).render()
 
-    def _build_level_expressions(self, tier: MatchingTierConfig) -> list[dict]:
+    def _build_level_expressions(self, tier: MatchingTierConfig) -> list[dict[str, Any]]:
         """Build SQL expressions for each comparison level.
 
         Returns list of:

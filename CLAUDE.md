@@ -8,7 +8,7 @@
 **bq-entity-resolution** is a config-driven entity resolution pipeline for BigQuery.
 Python generates SQL; BigQuery (or DuckDB locally) executes it. No data leaves the warehouse.
 
-- **2,879 tests**, all passing (160+ source files, 25,000+ LOC)
+- **3,833 tests**, all passing (160+ source files, 25,000+ LOC)
 - **v0.2.0** — published to PyPI as `bq-entity-resolution`
 - **Python 3.11+** with Pydantic v2, Click, structlog, sqlglot
 - **19 entity types**, 57 column roles, 16 domain presets, 20 example configs
@@ -17,7 +17,7 @@ Python generates SQL; BigQuery (or DuckDB locally) executes it. No data leaves t
 
 ```bash
 # Tests
-python -m pytest tests/ -v                    # 2879 tests, ~49s
+python -m pytest tests/ -v                    # 3833 tests, ~90s
 C:/Users/amare/AppData/Local/Programs/Python/Python312/python.exe -m pytest tests/ -v  # Windows
 
 # Lint + Type Check
@@ -34,6 +34,7 @@ bq-er run --config config.yml --dry-run
 bq-er run --config config.yml --full-refresh
 bq-er run --config config.yml --drain              # Process all pending batches
 bq-er profile-cursors --config config.yml           # Recommend cursor strategies
+bq-er profile-placeholders --config config.yml      # Detect placeholder values
 bq-er profile --config config.yml                   # Profile source data
 bq-er describe --config config.yml                  # Describe pipeline configuration
 ```
@@ -170,7 +171,7 @@ feature_engineering:
   name_features:
     features:
       - name: first_name_clean
-        function: name_clean         # One of 92 built-in functions
+        function: name_clean         # One of 104 built-in functions
         input: first_name
   blocking_keys:
     - name: bk_email
@@ -186,7 +187,7 @@ matching_tiers:
     comparisons:
       - left: email_clean
         right: email_clean
-        method: exact                # One of 49 built-in methods
+        method: exact                # One of 54 built-in methods
         weight: 5.0
     threshold:
       min_score: 5.0
@@ -362,10 +363,10 @@ The pipeline follows Google's Application Default Credentials (ADC):
 src/bq_entity_resolution/
   config/          Pydantic v2 schema (28 models), YAML loader, 16 presets, 57 roles, 29 validators, 19 entity types
   config/models/   7 domain-specific config sub-modules (blocking, features, matching, etc.)
-  sql/builders/    21 Python SQL builder modules (type-safe, testable)
+  sql/builders/    23 Python SQL builder modules (type-safe, testable)
   sql/             SQLExpression wrapper (sqlglot), utilities
-  features/        Feature function registry (92 functions via @register)
-  matching/        Comparison registry (49 functions), F-S parameters, active learning
+  features/        Feature function registry (104 functions via @register)
+  matching/        Comparison registry (54 functions), F-S parameters, active learning
   blocking/        Blocking key validation, LSH bucket logic
   reconciliation/  Clustering descriptions, canonical output logic
   embeddings/      BigQuery ML embedding generation + LSH
@@ -415,8 +416,8 @@ src/bq_entity_resolution/
 2. `pipeline/pipeline.py` — Pipeline class (main entry point)
 3. `config/presets/` — quick_config() and 16 domain-specific presets (person, insurance, telecom, logistics, retail, etc.)
 4. `config/roles.py` — 57 column roles → auto-feature/blocking/comparison mapping (10 industry role sets)
-5. `features/registry.py` — All 92 feature functions (barrel import from 14 sub-modules)
-6. `matching/comparisons/__init__.py` — All 49 comparison functions (barrel import from 7 sub-modules)
+5. `features/registry.py` — All 104 feature functions (barrel import from 14 sub-modules)
+6. `matching/comparisons/__init__.py` — All 54 comparison functions (barrel import from 7 sub-modules)
 7. `naming.py` — All table names
 8. `columns.py` — All column name constants
 9. `config/examples/` — 20 example configs (minimal to production-grade, covering 10+ industries)

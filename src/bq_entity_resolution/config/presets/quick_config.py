@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from bq_entity_resolution.config.presets.helpers import _build_config
 from bq_entity_resolution.config.roles import detect_role
+from bq_entity_resolution.config.schema import PipelineConfig
 from bq_entity_resolution.exceptions import ConfigurationError
 
 
@@ -20,7 +21,7 @@ def quick_config(
     column_roles: dict[str, str] | None = None,
     project_name: str | None = None,
     entity_type: str | None = None,
-):
+) -> PipelineConfig:
     """Generate a complete PipelineConfig from minimal inputs.
 
     This is Level 1 progressive disclosure: provide a source table

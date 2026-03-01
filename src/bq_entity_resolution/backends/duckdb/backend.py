@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 import duckdb
 
@@ -64,7 +65,7 @@ class DuckDBBackend:
         """Close the DuckDB connection and release resources."""
         if self._conn is not None:
             self._conn.close()
-            self._conn = None
+            self._conn = None  # type: ignore[assignment]
 
     def __enter__(self) -> DuckDBBackend:
         return self
@@ -145,7 +146,7 @@ class DuckDBBackend:
             logger.error("SQL:\n%s", _redact_sql(sql[:500]))
             raise
 
-    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         self._check_open()
         sql = adapt_sql(sql)
         result = self._conn.execute(sql)
@@ -187,11 +188,11 @@ class DuckDBBackend:
             duration_seconds=time.monotonic() - start,
         )
 
-    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         self._check_open()
         sql = adapt_sql(sql)
         statements = split_statements(sql)
-        last_result: list[dict] = []
+        last_result: list[dict[str, Any]] = []
         for stmt in statements:
             stmt = stmt.strip()
             if not stmt:
@@ -241,7 +242,8 @@ class DuckDBBackend:
         table_name = _local_table_name(table_ref)
         validate_identifier(table_name, context="table name")
         result = self._conn.execute(f"SELECT COUNT(*) FROM {table_name}")
-        return result.fetchone()[0]
+        row = result.fetchone()
+        return int(row[0]) if row else 0
 
     def load_csv(self, table_name: str, csv_path: str) -> None:
         """Load a CSV file into a table for test setup."""
@@ -254,7 +256,7 @@ class DuckDBBackend:
             f"SELECT * FROM read_csv_auto('{safe_path}')"
         )
 
-    def create_table_from_data(self, table_name: str, data: list[dict]) -> None:
+    def create_table_from_data(self, table_name: str, data: list[dict[str, Any]]) -> None:
         """Create a table from a list of dicts for test setup."""
         if not data:
             return

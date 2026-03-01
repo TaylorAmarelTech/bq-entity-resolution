@@ -92,21 +92,24 @@ def _register_phonetic_udfs(conn: duckdb.DuckDBPyConnection) -> None:
 
     try:
         conn.create_function(
-            "SOUNDEX", _soundex, ["VARCHAR"], "VARCHAR",
-            null_handling="special",
+            "SOUNDEX", _soundex,
+            ["VARCHAR"],  # type: ignore[list-item]
+            "VARCHAR",  # type: ignore[arg-type]
+            null_handling="special",  # type: ignore[arg-type]
         )
     except Exception as e:
         logger.debug("Failed to register SOUNDEX UDF: %s", e)
 
     # metaphone -- delegates to SOUNDEX unless metaphone library available
     try:
-        from metaphone import doublemetaphone
+        from metaphone import doublemetaphone  # type: ignore[import-untyped]
 
         def _metaphone(s: str) -> str | None:
             if not s or not s.strip():
                 return None
             result = doublemetaphone(s.strip())
-            return result[0] if result[0] else result[1]
+            primary: str | None = result[0] if result[0] else result[1]
+            return primary
 
         def _dm_primary(s: str) -> str | None:
             if not s or not s.strip():
@@ -119,18 +122,22 @@ def _register_phonetic_udfs(conn: duckdb.DuckDBPyConnection) -> None:
             return doublemetaphone(s.strip())[1] or None
 
         conn.create_function(
-            "metaphone", _metaphone, ["VARCHAR"], "VARCHAR",
-            null_handling="special",
+            "metaphone", _metaphone,
+            ["VARCHAR"],  # type: ignore[list-item]
+            "VARCHAR",  # type: ignore[arg-type]
+            null_handling="special",  # type: ignore[arg-type]
         )
         conn.create_function(
             "double_metaphone_primary", _dm_primary,
-            ["VARCHAR"], "VARCHAR",
-            null_handling="special",
+            ["VARCHAR"],  # type: ignore[list-item]
+            "VARCHAR",  # type: ignore[arg-type]
+            null_handling="special",  # type: ignore[arg-type]
         )
         conn.create_function(
             "double_metaphone_alternate", _dm_alternate,
-            ["VARCHAR"], "VARCHAR",
-            null_handling="special",
+            ["VARCHAR"],  # type: ignore[list-item]
+            "VARCHAR",  # type: ignore[arg-type]
+            null_handling="special",  # type: ignore[arg-type]
         )
     except ImportError:
         logger.debug("metaphone library not available; using SOUNDEX fallback")

@@ -40,6 +40,7 @@ def run(
     """Execute the entity resolution pipeline."""
     from bq_entity_resolution.config.loader import load_config
     from bq_entity_resolution.monitoring.logging import setup_logging
+    from bq_entity_resolution.pipeline.executor import PipelineResult
     from bq_entity_resolution.pipeline.pipeline import Pipeline
 
     try:
@@ -84,7 +85,7 @@ def run(
                 with BigQueryBackend(project=cfg.project.bq_project) as backend:
                     estimate = pipeline.estimate_cost(backend=backend)
                     click.echo(f"\nEstimated cost: {estimate.total_gb:.2f} GB "
-                               f"(~${estimate.estimated_usd:.4f})")
+                               f"(~${estimate.estimated_cost_usd:.4f})")
             except Exception:
                 pass  # Cost estimation requires BQ access; skip if unavailable
         else:
@@ -114,13 +115,14 @@ def run(
                     full_refresh=full_refresh,
                     drain=drain,
                     resume=resume,
-                    checkpoint_manager=checkpoint_manager,
+                    checkpoint_manager=checkpoint_manager,  # type: ignore[arg-type]
                 )
 
-                click.echo(f"\nPipeline completed: {result.run_id}")
-                click.echo(f"Stages executed: {len(result.completed_stages)}")
-                for stage in result.completed_stages:
-                    click.echo(f"  - {stage}")
+                if isinstance(result, PipelineResult):
+                    click.echo(f"\nPipeline completed: {result.run_id}")
+                    click.echo(f"Stages executed: {len(result.completed_stages)}")
+                    for stage in result.completed_stages:
+                        click.echo(f"  - {stage}")
 
     except Exception as e:
         logger.exception("Pipeline failed: %s", e)

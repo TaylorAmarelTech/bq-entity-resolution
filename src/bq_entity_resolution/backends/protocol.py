@@ -8,7 +8,7 @@ the same pipeline code.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class QueryResult:
     duration_seconds: float = 0.0
     total_bytes_processed: int = 0
     slot_milliseconds: int = 0
-    rows: list[dict] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 @runtime_checkable
@@ -81,7 +81,7 @@ class Backend(Protocol):
         """Execute a SQL statement and return result metadata."""
         ...
 
-    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         """Execute SQL and return rows as list of dicts."""
         ...
 
@@ -89,7 +89,7 @@ class Backend(Protocol):
         """Execute a multi-statement SQL script."""
         ...
 
-    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         """Execute a SQL script and return the final result set."""
         ...
 

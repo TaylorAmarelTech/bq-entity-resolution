@@ -54,7 +54,7 @@ def describe(config: str, defaults: str | None) -> None:
         field_names = fe.model_fields if hasattr(fe, "model_fields") else {}
         for group_name in field_names:
             group = getattr(fe, group_name, None)
-            if hasattr(group, "features"):
+            if group is not None and hasattr(group, "features"):
                 all_features.extend(group.features)
         if hasattr(fe, "blocking_keys"):
             all_bk = fe.blocking_keys

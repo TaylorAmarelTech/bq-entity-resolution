@@ -16,6 +16,7 @@ from bq_entity_resolution.stages.base import TableRef
 
 if TYPE_CHECKING:
     from bq_entity_resolution.backends.protocol import Backend
+    from bq_entity_resolution.config.schema import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ class DataQualityScoreGate(DataQualityGate):
         )
 
 
-def default_gates(config=None) -> list[DataQualityGate]:
+def default_gates(config: PipelineConfig | None = None) -> list[DataQualityGate]:
     """Create default quality gates for the pipeline.
 
     Returns gates that should always be active:

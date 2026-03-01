@@ -148,8 +148,8 @@ class PipelineConfig(BaseModel):
                     self.global_hard_negatives.append(HardNegativeDef(
                         left=signal.left,
                         method=signal.method,
-                        action=signal.action,
-                        severity=signal.severity,
+                        action=signal.action,  # type: ignore[arg-type]
+                        severity=signal.severity,  # type: ignore[arg-type]
                         penalty=signal.value,
                         entity_type_condition=source.entity_type.lower(),
                         category=signal.category,

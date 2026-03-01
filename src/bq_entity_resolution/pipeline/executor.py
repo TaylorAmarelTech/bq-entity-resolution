@@ -99,6 +99,7 @@ class StageExecutionResult:
     duration_seconds: float = 0.0
     rows_affected: int = 0
     skipped: bool = False
+    _original_exception: Exception | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -113,7 +114,7 @@ class PipelineResult:
     status: str = "running"
     error: str | None = None
     stage_results: list[StageExecutionResult] = field(default_factory=list)
-    sql_log: list[dict] = field(default_factory=list)
+    sql_log: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -136,10 +137,10 @@ class PipelineResult:
     @property
     def total_sql_duration_seconds(self) -> float:
         """Sum of per-query durations across all SQL log entries."""
-        return sum(
+        return float(sum(
             entry.get("duration_seconds", 0.0)
             for entry in self.sql_log
-        )
+        ))
 
     @property
     def total_bytes_billed(self) -> int:

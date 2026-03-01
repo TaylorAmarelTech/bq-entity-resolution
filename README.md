@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/bq-entity-resolution.svg)](https://pypi.org/project/bq-entity-resolution/)
 [![Python](https://img.shields.io/pypi/pyversions/bq-entity-resolution.svg)](https://pypi.org/project/bq-entity-resolution/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1721%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-3833%20passing-brightgreen.svg)]()
 
 A configurable, multi-tier entity resolution pipeline for Google BigQuery. Python handles configuration and SQL generation; BigQuery executes all data processing. No data leaves the warehouse.
 
@@ -261,7 +261,7 @@ matching_tiers:
         +---------------------------------+---------------------------------+
                                           |
         +---------------------------------v---------------------------------+
-        |               SQL Builders (14 modules, 30 functions)              |
+        |               SQL Builders (23 modules, 30 functions)              |
         |                                                                    |
         |  Frozen @dataclass params -> build_*() -> SQLExpression            |
         |  Type-safe, unit-testable, no templates                            |
@@ -346,7 +346,7 @@ matching_tiers:
 
 ## Built-in Functions
 
-### Feature Functions (92)
+### Feature Functions (104)
 
 | Category | Functions |
 |----------|-----------|
@@ -363,7 +363,7 @@ matching_tiers:
 | Geo | `geo_hash`, `lat_lon_bucket`, `geo_region_code` |
 | Utility | `upper_trim`, `lower_trim`, `left`, `right`, `coalesce`, `concat`, `nullif_empty`, `identity`, and more |
 
-### Comparison Functions (49)
+### Comparison Functions (54)
 
 | Category | Functions |
 |----------|-----------|
@@ -394,6 +394,7 @@ matching_tiers:
 | `bq-er check-env` | Check BigQuery credentials and permissions |
 | `bq-er describe` | Describe pipeline configuration |
 | `bq-er profile-cursors` | Recommend cursor strategies for incremental processing |
+| `bq-er profile-placeholders` | Detect placeholder values in source data |
 
 ## Environment Variables
 
@@ -450,7 +451,7 @@ pipeline.run(backend=DuckDBBackend())
 
 ```bash
 pip install -e ".[dev,local]"
-python -m pytest tests/ -v               # 1721 tests, ~44s
+python -m pytest tests/ -v               # 3833 tests, ~90s
 python -m ruff check src/                 # lint
 python -m mypy src/                       # type check
 ```
@@ -460,10 +461,10 @@ python -m mypy src/                       # type check
 ```
 src/bq_entity_resolution/
   config/        Pydantic v2 schema, YAML loader, presets, role mapping, validators
-  sql/builders/  14 Python SQL builder modules (type-safe, testable)
+  sql/builders/  23 Python SQL builder modules (type-safe, testable)
   sql/           SQLExpression wrapper (sqlglot-based), SQL utilities
-  features/      Feature function registry (92 functions via @register)
-  matching/      Comparison registry (49 functions), parameters, active learning
+  features/      Feature function registry (104 functions via @register)
+  matching/      Comparison registry (54 functions), parameters, active learning
   blocking/      Blocking key validation, LSH bucket logic
   reconciliation/  Clustering strategy descriptions, canonical output logic
   embeddings/    BigQuery ML embedding generation + LSH

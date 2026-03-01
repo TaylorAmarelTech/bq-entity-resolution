@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class DataQualityScorer:
         self,
         placeholder_rates: dict[str, float] | None = None,
         null_rates: dict[str, float] | None = None,
-        blocking_stats: list[dict] | None = None,
+        blocking_stats: list[dict[str, Any]] | None = None,
     ) -> DataQualityScore:
         """Compute the aggregate data quality score.
 

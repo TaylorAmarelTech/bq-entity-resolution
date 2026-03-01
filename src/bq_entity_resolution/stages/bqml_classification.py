@@ -173,7 +173,7 @@ class BQMLTrainingStage(Stage):
         params = BQMLModelParams(
             training_table=self._training_table,
             model_name=self._model_name,
-            model_type=self._model_type,
+            model_type=self._model_type,  # type: ignore[arg-type]
             feature_columns=self._feature_columns,
             max_iterations=self._max_iterations,
             auto_class_weights=self._auto_class_weights,

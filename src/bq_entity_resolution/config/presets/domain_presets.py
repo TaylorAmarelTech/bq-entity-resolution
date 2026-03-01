@@ -61,7 +61,7 @@ def person_dedup_preset(
 
 def person_linkage_preset(
     bq_project: str,
-    source_tables: list[dict],
+    source_tables: list[dict[str, str]],
     columns: dict[str, str],
     unique_key: str = "id",
     updated_at: str = "updated_at",

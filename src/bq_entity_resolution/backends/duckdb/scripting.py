@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 
 import duckdb
 
@@ -36,7 +37,7 @@ def is_bq_scripting(sql: str) -> bool:
 def execute_bq_scripting(
     conn: duckdb.DuckDBPyConnection,
     sql: str,
-    split_fn: callable,
+    split_fn: Callable[[str], list[str]],
 ) -> int:
     """Interpret BQ scripting (DECLARE/WHILE/SET/LOOP) in Python.
 
@@ -113,7 +114,8 @@ def execute_bq_scripting(
             cond_sql = substitute_vars(condition, variables)
             try:
                 result = conn.execute(f"SELECT {cond_sql}")
-                if not result.fetchone()[0]:
+                row = result.fetchone()
+                if row is None or not row[0]:
                     break
             except Exception as e:
                 logger.warning("WHILE condition eval failed: %s", e)
@@ -144,7 +146,8 @@ def execute_bq_scripting(
                 cond_sql = substitute_vars(if_match.group(1), variables)
                 try:
                     cond_result = conn.execute(f"SELECT {cond_sql}")
-                    if cond_result.fetchone()[0]:
+                    cond_row = cond_result.fetchone()
+                    if cond_row is not None and cond_row[0]:
                         body = if_match.group(2).strip()
                         if re.match(r'LEAVE\b', body, re.IGNORECASE):
                             should_leave = True
@@ -162,7 +165,8 @@ def execute_bq_scripting(
                 expr = substitute_vars(set_match.group(2), variables)
                 try:
                     result = conn.execute(f"SELECT {expr}")
-                    variables[var_name] = result.fetchone()[0]
+                    set_row = result.fetchone()
+                    variables[var_name] = set_row[0] if set_row is not None else None
                 except Exception as e:
                     logger.error("SET %s eval failed in loop: %s", var_name, e)
                     variables[var_name] = None
@@ -206,7 +210,7 @@ def _execute_linear(
     conn: duckdb.DuckDBPyConnection,
     sql: str,
     variables: dict[str, object],
-    split_fn: callable,
+    split_fn: Callable[[str], list[str]],
 ) -> int:
     """Execute non-loop scripting (DECLARE + SET + regular statements)."""
     total_rows = 0
@@ -223,7 +227,8 @@ def _execute_linear(
             expr = substitute_vars(set_match.group(2), variables)
             try:
                 r = conn.execute(f"SELECT {expr}")
-                variables[var_name] = r.fetchone()[0]
+                set_row = r.fetchone()
+                variables[var_name] = set_row[0] if set_row is not None else None
             except Exception as e:
                 logger.warning("SET %s eval failed: %s", var_name, e)
             continue

@@ -46,11 +46,12 @@ def profile(
         # Resolve source
         src = cfg.sources[0]
         if source:
-            src = next((s for s in cfg.sources if s.name == source), None)
-            if not src:
+            found = next((s for s in cfg.sources if s.name == source), None)
+            if not found:
                 available = [s.name for s in cfg.sources]
                 click.echo(f"Source '{source}' not found. Available: {available}", err=True)
                 sys.exit(1)
+            src = found
 
         # Resolve columns
         if columns:

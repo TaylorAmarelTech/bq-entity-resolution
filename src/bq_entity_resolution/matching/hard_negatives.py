@@ -8,12 +8,14 @@ different EINs for companies).
 
 from __future__ import annotations
 
+from typing import Any
+
 from bq_entity_resolution.config.schema import HardNegativeDef
 from bq_entity_resolution.exceptions import SQLGenerationError
 from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS, _validated_call
 
 
-def build_hard_negative_expr(hn: HardNegativeDef) -> dict:
+def build_hard_negative_expr(hn: HardNegativeDef) -> dict[str, Any]:
     """
     Build a hard negative SQL expression dict from config.
 

@@ -200,15 +200,15 @@ class CursorProfiler:
 
         if hash_results:
             lines.append("Hash Cursors (fallback — adds FARM_FINGERPRINT cost):")
-            for r in hash_results[:3]:
+            for hr in hash_results[:3]:
                 lines.append(
-                    f"  MOD {r.modulus}: score={r.score:.2f}"
+                    f"  MOD {hr.modulus}: score={hr.score:.2f}"
                 )
-                lines.append(f"    {r.recommendation}")
+                lines.append(f"    {hr.recommendation}")
                 lines.append(
-                    f"    avg/bucket={r.avg_records_per_bucket:,.0f}, "
-                    f"max/bucket={r.max_records_per_bucket:,}, "
-                    f"est_batches={r.estimated_batches}"
+                    f"    avg/bucket={hr.avg_records_per_bucket:,.0f}, "
+                    f"max/bucket={hr.max_records_per_bucket:,}, "
+                    f"est_batches={hr.estimated_batches}"
                 )
             lines.append("")
 

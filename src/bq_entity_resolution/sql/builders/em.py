@@ -11,6 +11,7 @@ for local (DuckDB) execution where the iteration loop runs in Python.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from bq_entity_resolution.columns import (
     ENTITY_UID,
@@ -322,7 +323,8 @@ class LabelEstimationParams:
     """Parameters for estimating m/u from labeled pairs."""
     labeled_pairs_table: str
     source_table: str
-    comparisons: list[dict]  # [{name, left, right, levels: [{label, sql_expr, has_expr}]}]
+    # [{name, left, right, levels: [{label, sql_expr, has_expr}]}]
+    comparisons: list[dict[str, Any]]
 
     def __post_init__(self) -> None:
         validate_table_ref(self.labeled_pairs_table)

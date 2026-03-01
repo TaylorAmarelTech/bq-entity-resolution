@@ -37,43 +37,43 @@ class TestRoleSetsExist:
     """Verify that all cross-industry role sets are defined and non-empty."""
 
     def test_telecom_roles_exist(self):
-        assert isinstance(TELECOM_ROLES, set)
+        assert isinstance(TELECOM_ROLES, frozenset)
         assert len(TELECOM_ROLES) > 0
 
     def test_logistics_roles_exist(self):
-        assert isinstance(LOGISTICS_ROLES, set)
+        assert isinstance(LOGISTICS_ROLES, frozenset)
         assert len(LOGISTICS_ROLES) > 0
 
     def test_retail_roles_exist(self):
-        assert isinstance(RETAIL_ROLES, set)
+        assert isinstance(RETAIL_ROLES, frozenset)
         assert len(RETAIL_ROLES) > 0
 
     def test_real_estate_roles_exist(self):
-        assert isinstance(REAL_ESTATE_ROLES, set)
+        assert isinstance(REAL_ESTATE_ROLES, frozenset)
         assert len(REAL_ESTATE_ROLES) > 0
 
     def test_public_sector_roles_exist(self):
-        assert isinstance(PUBLIC_SECTOR_ROLES, set)
+        assert isinstance(PUBLIC_SECTOR_ROLES, frozenset)
         assert len(PUBLIC_SECTOR_ROLES) > 0
 
     def test_education_roles_exist(self):
-        assert isinstance(EDUCATION_ROLES, set)
+        assert isinstance(EDUCATION_ROLES, frozenset)
         assert len(EDUCATION_ROLES) > 0
 
     def test_travel_roles_exist(self):
-        assert isinstance(TRAVEL_ROLES, set)
+        assert isinstance(TRAVEL_ROLES, frozenset)
         assert len(TRAVEL_ROLES) > 0
 
     def test_manufacturing_roles_exist(self):
-        assert isinstance(MANUFACTURING_ROLES, set)
+        assert isinstance(MANUFACTURING_ROLES, frozenset)
         assert len(MANUFACTURING_ROLES) > 0
 
     def test_vendor_master_roles_exist(self):
-        assert isinstance(VENDOR_MASTER_ROLES, set)
+        assert isinstance(VENDOR_MASTER_ROLES, frozenset)
         assert len(VENDOR_MASTER_ROLES) > 0
 
     def test_identity_fraud_roles_exist(self):
-        assert isinstance(IDENTITY_FRAUD_ROLES, set)
+        assert isinstance(IDENTITY_FRAUD_ROLES, frozenset)
         assert len(IDENTITY_FRAUD_ROLES) > 0
 
 

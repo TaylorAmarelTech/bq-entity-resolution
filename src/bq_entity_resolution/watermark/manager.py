@@ -127,6 +127,9 @@ class WatermarkManager:
             )
 
         if fencing_provided == 3:
+            assert fencing_token is not None
+            assert lock_table is not None
+            assert pipeline_name is not None
             expr = build_fenced_watermark_update_sql(
                 watermark_table=self.watermark_table,
                 source_name=source_name,

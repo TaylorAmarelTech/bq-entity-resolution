@@ -533,7 +533,7 @@ class Pipeline:
 
         # Read initial watermarks if manager is provided (per-source)
         watermark = plan_kwargs.pop("watermark", None)
-        watermarks: dict[str, dict] = {}
+        watermarks: dict[str, dict[str, Any]] = {}
         if watermark_manager and not full_refresh and not watermark:
             for source in self._config.sources:
                 wm = watermark_manager.read(source.name)

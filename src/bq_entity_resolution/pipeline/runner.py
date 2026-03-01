@@ -45,7 +45,7 @@ class SQLRunner:
             entry["error"] = str(exc)
             raise
 
-    def execute_and_fetch(self, sql: str, job_label: str = "") -> list[dict]:
+    def execute_and_fetch(self, sql: str, job_label: str = "") -> list[dict[str, Any]]:
         """Execute SQL and return rows."""
         return self.bq_client.execute_and_fetch(sql, job_label=job_label)
 
@@ -53,7 +53,7 @@ class SQLRunner:
         """Execute a multi-statement SQL script (BigQuery scripting)."""
         return self.execute(sql, job_label=job_label)
 
-    def execute_script_and_fetch(self, sql: str, job_label: str = "") -> list[dict]:
+    def execute_script_and_fetch(self, sql: str, job_label: str = "") -> list[dict[str, Any]]:
         """Execute a multi-statement SQL script and return the final result set."""
         entry: dict[str, Any] = {
             "label": job_label,
@@ -84,6 +84,6 @@ class SQLRunner:
         )
 
     @property
-    def execution_log(self) -> list[dict]:
+    def execution_log(self) -> list[dict[str, Any]]:
         """Return all executed queries for audit."""
         return self.executed_queries

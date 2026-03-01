@@ -66,7 +66,7 @@ def build_read_watermark_sql(table: str, source_name: str) -> SQLExpression:
 def build_update_watermark_sql(
     table: str,
     source_name: str,
-    cursors: list[dict],
+    cursors: list[dict[str, str]],
     run_id: str,
     now: str,
 ) -> SQLExpression:
@@ -132,7 +132,7 @@ def build_update_watermark_sql(
 def build_fenced_watermark_update_sql(
     watermark_table: str,
     source_name: str,
-    cursors: list[dict],
+    cursors: list[dict[str, str]],
     run_id: str,
     now: str,
     lock_table: str,

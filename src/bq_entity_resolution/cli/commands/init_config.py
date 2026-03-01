@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import click
 
 
@@ -44,9 +46,9 @@ def init(project: str, table: str | None, preset: str, output: str) -> None:
     )
 
     columns: list[dict[str, str]] = []
-    features: list[dict] = []
-    blocking_keys: list[dict] = []
-    comparisons: list[dict] = []
+    features: list[dict[str, str]] = []
+    blocking_keys: list[dict[str, Any]] = []
+    comparisons: list[dict[str, Any]] = []
 
     source_name = "source"
     source_table = table or f"{project}.raw.YOUR_TABLE"
@@ -134,7 +136,7 @@ def init(project: str, table: str | None, preset: str, output: str) -> None:
                 if spec.feature_suffix
                 else col_name
             )
-            comp: dict = {
+            comp: dict[str, Any] = {
                 "left": feature_col,
                 "right": feature_col,
                 "method": spec.method,
@@ -147,7 +149,7 @@ def init(project: str, table: str | None, preset: str, output: str) -> None:
     # Build config dict
     total_weight = sum(c.get("weight", 1.0) for c in comparisons) if comparisons else 10.0
 
-    config_dict: dict = {
+    config_dict: dict[str, Any] = {
         "version": "1.0",
         "project": {
             "name": source_name,

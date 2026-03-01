@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from bq_entity_resolution.sql.builders.watermark import (
     build_create_checkpoint_table_sql,
@@ -39,7 +40,7 @@ class CheckpointManager:
 
     def __init__(
         self,
-        bq_client: object,
+        bq_client: Any,
         checkpoint_table: str,
     ):
         self._client = bq_client
@@ -78,7 +79,7 @@ class CheckpointManager:
         )
         rows = self._client.execute_and_fetch(sql)
         if rows:
-            return rows[0]["run_id"]
+            return str(rows[0]["run_id"])
         return None
 
     def mark_stage_complete(
@@ -119,6 +120,9 @@ class CheckpointManager:
             )
 
         if fencing_provided == 3:
+            assert fencing_token is not None
+            assert lock_table is not None
+            assert pipeline_name is not None
             now = datetime.now(UTC).isoformat()
             expr = build_fenced_checkpoint_insert_sql(
                 checkpoint_table=self._table,

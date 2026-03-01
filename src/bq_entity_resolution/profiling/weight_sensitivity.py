@@ -11,6 +11,8 @@ Three analysis types:
 
 from __future__ import annotations
 
+from typing import Any
+
 from bq_entity_resolution.config.schema import MatchingTierConfig, PipelineConfig
 from bq_entity_resolution.naming import matches_table
 
@@ -195,7 +197,7 @@ class WeightSensitivityAnalyzer:
         return "\n".join(lines)
 
     def format_contribution_report(
-        self, rows: list[dict], tier_name: str
+        self, rows: list[dict[str, Any]], tier_name: str
     ) -> str:
         """Format contribution analysis results into a readable report."""
         lines = [

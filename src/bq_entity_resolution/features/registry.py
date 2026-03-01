@@ -132,7 +132,7 @@ def load_feature_plugins() -> None:
         eps = entry_points(group="bq_er.features")
     except TypeError:
         all_eps = entry_points()
-        eps = all_eps.get("bq_er.features", [])
+        eps = all_eps.get("bq_er.features", [])  # type: ignore[arg-type]
 
     for ep in eps:
         try:

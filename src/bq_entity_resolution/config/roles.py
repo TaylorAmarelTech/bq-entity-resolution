@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Role → Feature mapping
@@ -465,7 +466,7 @@ class ComparisonSpec:
     method: str
     feature_suffix: str  # Applied to both left and right columns
     weight: float = 1.0
-    params: dict = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 ROLE_COMPARISONS: dict[str, list[ComparisonSpec]] = {
@@ -913,7 +914,7 @@ def detect_role(column_name: str) -> str | None:
 
 def features_for_role(
     column_name: str, role: str
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Generate feature definitions for a column with a given role.
 
     Returns a list of dicts suitable for FeatureDef construction:
@@ -933,7 +934,7 @@ def features_for_role(
 
 def blocking_keys_for_role(
     column_name: str, role: str
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Generate blocking key definitions for a column with a given role.
 
     Returns a list of dicts suitable for BlockingKeyDef construction.
@@ -951,7 +952,7 @@ def blocking_keys_for_role(
 
 def comparisons_for_role(
     column_name: str, role: str
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Generate comparison definitions for a column with a given role.
 
     Returns a list of dicts suitable for ComparisonDef construction.
@@ -980,116 +981,116 @@ def comparisons_for_role(
 # Available roles
 # ---------------------------------------------------------------------------
 
-PERSON_ROLES = {
+PERSON_ROLES: frozenset[str] = frozenset({
     "first_name", "last_name", "full_name",
     "date_of_birth", "email", "phone",
     "address_line_1", "city", "state", "zip_code", "ssn",
-}
+})
 
-BUSINESS_ROLES = {
+BUSINESS_ROLES: frozenset[str] = frozenset({
     "company_name", "ein",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email",
-}
+})
 
-INSURANCE_ROLES = {
+INSURANCE_ROLES: frozenset[str] = frozenset({
     "policy_number", "claim_number",
     "first_name", "last_name", "full_name",
     "date_of_birth", "date_of_loss",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email", "ssn",
-}
+})
 
-FINANCIAL_ROLES = {
+FINANCIAL_ROLES: frozenset[str] = frozenset({
     "account_number", "routing_number",
     "transaction_amount", "transaction_date",
     "first_name", "last_name", "full_name",
     "email", "phone", "ssn",
     "address_line_1", "city", "state", "zip_code",
-}
+})
 
-HEALTHCARE_ROLES = {
+HEALTHCARE_ROLES: frozenset[str] = frozenset({
     "npi", "mrn",
     "first_name", "last_name", "full_name",
     "date_of_birth",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email", "ssn",
-}
+})
 
-TELECOM_ROLES = {
+TELECOM_ROLES: frozenset[str] = frozenset({
     "subscriber_id", "imsi", "imei", "msisdn",
     "service_point_id", "meter_id", "circuit_id", "equipment_serial",
     "first_name", "last_name", "full_name",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email",
-}
+})
 
-LOGISTICS_ROLES = {
+LOGISTICS_ROLES: frozenset[str] = frozenset({
     "duns_number", "mc_dot_number", "carrier_scac",
     "bill_of_lading", "container_id", "tracking_number",
     "company_name", "ein",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email",
-}
+})
 
-RETAIL_ROLES = {
+RETAIL_ROLES: frozenset[str] = frozenset({
     "loyalty_id", "customer_id", "order_id",
     "device_fingerprint_id", "payment_token_id",
     "first_name", "last_name", "full_name",
     "email", "phone",
     "address_line_1", "city", "state", "zip_code",
-}
+})
 
-REAL_ESTATE_ROLES = {
+REAL_ESTATE_ROLES: frozenset[str] = frozenset({
     "parcel_number", "mls_id", "deed_reference",
     "address_line_1", "city", "state", "zip_code",
     "full_name", "company_name",
     "phone", "email",
-}
+})
 
-PUBLIC_SECTOR_ROLES = {
+PUBLIC_SECTOR_ROLES: frozenset[str] = frozenset({
     "passport", "national_id", "voter_registration",
     "license_number", "case_number",
     "first_name", "last_name", "full_name",
     "date_of_birth", "ssn",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email",
-}
+})
 
-EDUCATION_ROLES = {
+EDUCATION_ROLES: frozenset[str] = frozenset({
     "student_id", "enrollment_id", "institution_code",
     "first_name", "last_name", "full_name",
     "date_of_birth", "email", "phone",
     "address_line_1", "city", "state", "zip_code",
-}
+})
 
-TRAVEL_ROLES = {
+TRAVEL_ROLES: frozenset[str] = frozenset({
     "guest_id", "booking_reference", "frequent_flyer_number",
     "first_name", "last_name", "full_name",
     "email", "phone", "passport",
     "date_of_birth",
-}
+})
 
-MANUFACTURING_ROLES = {
+MANUFACTURING_ROLES: frozenset[str] = frozenset({
     "device_id", "serial_number", "asset_tag", "mac_address",
     "company_name", "vendor_id",
     "address_line_1", "city", "state", "zip_code",
-}
+})
 
-VENDOR_MASTER_ROLES = {
+VENDOR_MASTER_ROLES: frozenset[str] = frozenset({
     "vendor_id", "duns_number", "cage_code", "sam_uei",
     "company_name", "ein",
     "address_line_1", "city", "state", "zip_code",
     "phone", "email",
-}
+})
 
-IDENTITY_FRAUD_ROLES = {
+IDENTITY_FRAUD_ROLES: frozenset[str] = frozenset({
     "device_fingerprint_id", "ip_address", "user_agent",
     "first_name", "last_name", "full_name",
     "email", "phone", "ssn",
     "date_of_birth",
     "address_line_1", "city", "state", "zip_code",
-}
+})
 
 
 def roles_for_entity_type(entity_type: str) -> frozenset[str]:

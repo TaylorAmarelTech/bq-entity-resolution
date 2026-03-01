@@ -20,6 +20,7 @@ def setup_logging(level: str = "INFO", fmt: str = "json") -> None:
     """
     log_level = getattr(logging, level.upper(), logging.INFO)
 
+    renderer: structlog.processors.JSONRenderer | structlog.dev.ConsoleRenderer
     if fmt == "json":
         renderer = structlog.processors.JSONRenderer()
     else:

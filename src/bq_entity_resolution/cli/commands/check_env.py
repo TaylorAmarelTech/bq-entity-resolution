@@ -75,7 +75,7 @@ def check_env(config: str | None) -> None:
 
     # GCP auth
     try:
-        import google.auth  # type: ignore[import-untyped]
+        import google.auth
 
         credentials, project = google.auth.default()
         ok.append(f"GCP auth OK (project: {project or 'from credentials'})")

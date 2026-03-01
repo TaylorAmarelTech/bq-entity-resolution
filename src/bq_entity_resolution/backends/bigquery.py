@@ -6,6 +6,7 @@ Wraps the existing BigQueryClient to conform to the Backend protocol.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from bq_entity_resolution.backends.protocol import (
     ColumnDef,
@@ -96,7 +97,7 @@ class BigQueryBackend:
         if self._owns_client and self._client is not None:
             if hasattr(self._client, "close"):
                 self._client.close()
-            self._client = None
+            self._client = None  # type: ignore[assignment]
 
     def __enter__(self) -> BigQueryBackend:
         return self
@@ -127,7 +128,7 @@ class BigQueryBackend:
         bq_result = self._client.execute(sql, job_label=label)
         return _convert_result(bq_result)
 
-    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         self._check_open()
         return self._client.execute_and_fetch(sql, job_label=label)
 
@@ -137,7 +138,7 @@ class BigQueryBackend:
         bq_result = self._client.execute(sql, job_label=label)
         return _convert_result(bq_result)
 
-    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         self._check_open()
         return self._client.execute_script_and_fetch(sql, job_label=label)
 

@@ -50,6 +50,7 @@ dev = [
     "ruff>=0.3.0",
     "mypy>=1.8",
     "pip-audit>=2.7.0",
+    "types-PyYAML>=6.0",
 ]
 local = [
     "duckdb>=0.10.0,<2.0.0",

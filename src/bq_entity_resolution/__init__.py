@@ -32,6 +32,8 @@ Extending the pipeline::
     pipeline = Pipeline.from_stages(config, stages=[...], explicit_edges={...})
 """
 
+from typing import Any
+
 from bq_entity_resolution.backends.protocol import Backend, QueryResult
 from bq_entity_resolution.config.entity_types import (
     ENTITY_TYPE_TEMPLATES,
@@ -70,6 +72,7 @@ from bq_entity_resolution.exceptions import (
     ConfigurationError,
     EntityResolutionError,
     PipelineAbortError,
+    PipelineCostExceededError,
     SQLExecutionError,
 )
 
@@ -87,6 +90,7 @@ from bq_entity_resolution.matching.comparisons import (
 from bq_entity_resolution.matching.comparisons import (
     register as register_comparison,
 )
+from bq_entity_resolution.monitoring.data_quality import DataQualityScore, DataQualityScorer
 from bq_entity_resolution.pipeline.dag import StageDAG, build_pipeline_dag
 from bq_entity_resolution.pipeline.executor import (
     CheckpointManagerProtocol,
@@ -97,6 +101,7 @@ from bq_entity_resolution.pipeline.executor import (
 from bq_entity_resolution.pipeline.gates import (
     ClusterSizeGate,
     DataQualityGate,
+    DataQualityScoreGate,
     GateResult,
     OutputNotEmptyGate,
 )
@@ -105,6 +110,12 @@ from bq_entity_resolution.pipeline.pipeline import CostEstimate, Pipeline
 from bq_entity_resolution.pipeline.plan import PipelinePlan, StagePlan
 from bq_entity_resolution.pipeline.shutdown import GracefulShutdown
 from bq_entity_resolution.pipeline.validator import ContractViolation
+from bq_entity_resolution.profiling.placeholder_profiler import PlaceholderProfiler
+from bq_entity_resolution.sql.builders.blocking_effectiveness import (
+    BlockingEffectivenessParams,
+    TierEffectivenessParams,
+)
+from bq_entity_resolution.sql.builders.job_tracking import RunComparisonParams
 from bq_entity_resolution.sql.expression import SQLExpression
 from bq_entity_resolution.stages.base import Stage, StageResult, TableRef
 
@@ -121,7 +132,7 @@ from bq_entity_resolution.watermark.manager import WatermarkManager
 
 
 # Lazy imports for backends with optional dependencies
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "BigQueryBackend":
         from bq_entity_resolution.backends.bigquery import BigQueryBackend
         return BigQueryBackend
@@ -177,10 +188,19 @@ __all__ = [
     "CheckpointManagerProtocol",
     # Extensibility: gates + validation
     "DataQualityGate",
+    "DataQualityScoreGate",
     "GateResult",
     "OutputNotEmptyGate",
     "ClusterSizeGate",
     "ContractViolation",
+    # SQL builders
+    "RunComparisonParams",
+    "BlockingEffectivenessParams",
+    "TierEffectivenessParams",
+    # Monitoring & profiling
+    "DataQualityScore",
+    "DataQualityScorer",
+    "PlaceholderProfiler",
     # Backends
     "Backend",
     "QueryResult",
@@ -213,5 +233,6 @@ __all__ = [
     "EntityResolutionError",
     "ConfigurationError",
     "PipelineAbortError",
+    "PipelineCostExceededError",
     "SQLExecutionError",
 ]

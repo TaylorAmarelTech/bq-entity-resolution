@@ -6,6 +6,8 @@ They are not part of the public API.
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from bq_entity_resolution.config.roles import (
     blocking_keys_for_role,
     comparisons_for_role,
@@ -72,7 +74,7 @@ def _build_config(
         ),
         comparison_pool=comparison_pool,
         matching_tiers=tiers,
-        link_type=link_type,
+        link_type=cast(Literal["link_and_dedupe", "dedupe_only", "link_only"], link_type),
     )
 
 

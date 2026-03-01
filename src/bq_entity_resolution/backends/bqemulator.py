@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 from bq_entity_resolution.backends.protocol import (
     ColumnDef,
@@ -70,7 +71,7 @@ class BQEmulatorBackend:
         self._dataset = dataset
         self._client = bigquery.Client(
             project=project,
-            credentials=AnonymousCredentials(),
+            credentials=AnonymousCredentials(),  # type: ignore[no-untyped-call]
             client_options=ClientOptions(
                 api_endpoint=f"http://{host}:{port}",
             ),
@@ -101,8 +102,8 @@ class BQEmulatorBackend:
     def close(self) -> None:
         """Close the underlying BigQuery client."""
         if self._client is not None:
-            self._client.close()
-            self._client = None
+            self._client.close()  # type: ignore[no-untyped-call]
+            self._client = None  # type: ignore[assignment]
 
     def __enter__(self) -> BQEmulatorBackend:
         return self
@@ -132,7 +133,7 @@ class BQEmulatorBackend:
             logger.error("SQL:\n%s", sql[:500])
             raise
 
-    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         self._check_open()
         job = self._client.query(sql)
         result = job.result()
@@ -185,7 +186,7 @@ class BQEmulatorBackend:
             logger.error("BQ emulator script error (label=%s): %s", label, e)
             raise
 
-    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict]:
+    def execute_script_and_fetch(self, sql: str, label: str = "") -> list[dict[str, Any]]:
         self._check_open()
         job = self._client.query(sql)
         result = job.result()

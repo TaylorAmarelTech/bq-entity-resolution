@@ -15,8 +15,10 @@ import logging
 import random
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
+from typing import Any
 
 from google.api_core.exceptions import (
     BadRequest,
@@ -46,7 +48,7 @@ class QueryResult:
     bytes_billed: int = 0
     duration_seconds: float = 0.0
     slot_milliseconds: int = 0
-    rows: list[dict] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 class BigQueryClient:
@@ -148,7 +150,7 @@ class BigQueryClient:
         """Cancel active jobs and close the underlying client."""
         self.cancel_active_jobs()
         if hasattr(self._client, "close"):
-            self._client.close()
+            self._client.close()  # type: ignore[no-untyped-call]
 
     def __enter__(self) -> BigQueryClient:
         return self
@@ -183,11 +185,11 @@ class BigQueryClient:
 
     def _retry_execute(
         self,
-        fn: callable,
+        fn: Callable[[], Any],
         sql: str,
         job_label: str,
         context: str = "Query",
-    ):
+    ) -> Any:
         """Execute fn with retry + jitter for transient errors.
 
         Args:
@@ -242,7 +244,7 @@ class BigQueryClient:
 
         start = time.monotonic()
 
-        def _do():
+        def _do() -> QueryResult:
             logger.debug("Executing SQL (label=%s): %.200s...", job_label, sql)
             job = self._client.query(sql, job_config=job_config)
 
@@ -290,14 +292,15 @@ class BigQueryClient:
             )
             return qr
 
-        return self._retry_execute(_do, sql, job_label, context="Query")
+        result: QueryResult = self._retry_execute(_do, sql, job_label, context="Query")
+        return result
 
     def execute_and_fetch(
         self,
         sql: str,
         job_label: str = "",
         timeout: int | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Execute SQL and return rows as list of dicts.
 
         Includes retry logic with jitter, cost controls, and job
@@ -306,7 +309,7 @@ class BigQueryClient:
         effective_timeout = timeout or self.default_timeout
         job_config = self._make_job_config(job_label)
 
-        def _do():
+        def _do() -> list[dict[str, Any]]:
             job = self._client.query(sql, job_config=job_config)
             self._track_job(job)
             try:
@@ -331,14 +334,15 @@ class BigQueryClient:
                 self._total_bytes_billed += bytes_billed
             return rows
 
-        return self._retry_execute(_do, sql, job_label, context="Fetch")
+        rows: list[dict[str, Any]] = self._retry_execute(_do, sql, job_label, context="Fetch")
+        return rows
 
     def execute_script_and_fetch(
         self,
         sql: str,
         job_label: str = "",
         timeout: int | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Execute a multi-statement SQL script and return the final result set.
 
         Includes retry logic with jitter, cost controls, and job
@@ -347,7 +351,7 @@ class BigQueryClient:
         effective_timeout = timeout or self.default_timeout
         job_config = self._make_job_config(job_label)
 
-        def _do():
+        def _do() -> list[dict[str, Any]]:
             logger.debug(
                 "Executing script+fetch (label=%s): %.200s...", job_label, sql
             )
@@ -378,7 +382,8 @@ class BigQueryClient:
             )
             return rows
 
-        return self._retry_execute(_do, sql, job_label, context="Script")
+        rows: list[dict[str, Any]] = self._retry_execute(_do, sql, job_label, context="Script")
+        return rows
 
     def table_exists(self, table_ref: str) -> bool:
         """Check if a table exists.

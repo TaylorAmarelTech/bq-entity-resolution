@@ -27,7 +27,7 @@ from bq_entity_resolution.stages.base import Stage, TableRef
 logger = logging.getLogger(__name__)
 
 
-def _get_features_config(config):
+def _get_features_config(config: Any) -> Any:
     """Get the features config, supporting both attribute names.
 
     Real PipelineConfig uses 'feature_engineering', test mocks use 'features'.
@@ -38,7 +38,7 @@ def _get_features_config(config):
     )
 
 
-def _get_feature_groups(features_config):
+def _get_feature_groups(features_config: Any) -> Any:
     """Get feature groups, supporting both real config and test mocks.
 
     Real FeatureEngineeringConfig has all_groups() method.
@@ -105,7 +105,7 @@ class FeatureEngineeringStage(Stage):
 
         # Resolve features
         fc = _get_features_config(config)
-        all_features: list[dict] = []
+        all_features: list[dict[str, Any]] = []
         for group in _get_feature_groups(fc):
             for feat in group.features:
                 func = FEATURE_FUNCTIONS.get(feat.function)

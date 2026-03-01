@@ -202,7 +202,7 @@ def load_comparison_plugins() -> None:
         eps = entry_points(group="bq_er.comparisons")
     except TypeError:
         all_eps = entry_points()
-        eps = all_eps.get("bq_er.comparisons", [])
+        eps = all_eps.get("bq_er.comparisons", [])  # type: ignore[arg-type]
 
     for ep in eps:
         try:

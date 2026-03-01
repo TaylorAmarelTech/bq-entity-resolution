@@ -57,6 +57,8 @@ class SQLExpression:
         """Render the expression to SQL for the given dialect."""
         if self._raw_sql is not None:
             return self._raw_sql
+        if self._node is None:
+            raise ValueError("SQLExpression has neither raw_sql nor AST node")
         return self._node.sql(dialect=dialect, pretty=True)
 
     def validate(self, dialect: str = "bigquery") -> list[str]:

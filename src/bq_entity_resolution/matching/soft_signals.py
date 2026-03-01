@@ -7,12 +7,14 @@ Soft signals adjust the match score up or down based on supporting evidence
 
 from __future__ import annotations
 
+from typing import Any
+
 from bq_entity_resolution.config.schema import SoftSignalDef
 from bq_entity_resolution.exceptions import SQLGenerationError
 from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS, _validated_call
 
 
-def build_soft_signal_expr(ss: SoftSignalDef) -> dict:
+def build_soft_signal_expr(ss: SoftSignalDef) -> dict[str, Any]:
     """
     Build a soft signal SQL expression dict from config.
 

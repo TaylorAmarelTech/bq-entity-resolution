@@ -25,9 +25,9 @@ class PipelineContext:
     error: str | None = None
     watermarks: dict[str, Any] = field(default_factory=dict)
     staged_sources: list[str] = field(default_factory=list)
-    tier_results: dict[str, dict] = field(default_factory=dict)
-    sql_log: list[dict] = field(default_factory=list)
-    cluster_quality: dict | None = None
+    tier_results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    sql_log: list[dict[str, Any]] = field(default_factory=list)
+    cluster_quality: dict[str, Any] | None = None
     completed_stages: set[str] = field(default_factory=set)
 
     @property
