@@ -107,7 +107,7 @@ class PipelineLock:
             try:
                 from google.api_core.exceptions import BadRequest
             except ImportError:
-                BadRequest = None  # type: ignore[assignment,misc]
+                BadRequest = None  # type: ignore[assignment,misc]  # noqa: N806
             if BadRequest is not None and isinstance(exc, BadRequest):
                 pass  # Column already exists or table was just created with it
             else:

@@ -13,6 +13,7 @@ from bq_entity_resolution.cli.commands.init_config import init
 from bq_entity_resolution.cli.commands.preview_sql import preview_sql
 from bq_entity_resolution.cli.commands.profile import profile
 from bq_entity_resolution.cli.commands.profile_cursors import profile_cursors
+from bq_entity_resolution.cli.commands.profile_placeholders import profile_placeholders
 from bq_entity_resolution.cli.commands.review_queue import review_queue
 from bq_entity_resolution.cli.commands.run import run
 from bq_entity_resolution.cli.commands.validate import validate
@@ -48,6 +49,7 @@ cli.add_command(review_queue)
 cli.add_command(ingest_labels)
 cli.add_command(profile)
 cli.add_command(profile_cursors)
+cli.add_command(profile_placeholders)
 cli.add_command(analyze)
 cli.add_command(init)
 cli.add_command(check_env)

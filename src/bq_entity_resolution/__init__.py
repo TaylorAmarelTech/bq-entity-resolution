@@ -59,14 +59,6 @@ from bq_entity_resolution.config.presets import (
     travel_guest_preset,
     vendor_master_preset,
 )
-from bq_entity_resolution.exceptions import (
-    ConfigurationError,
-    EntityResolutionError,
-    PipelineAbortError,
-    SQLExecutionError,
-)
-from bq_entity_resolution.watermark.checkpoint import CheckpointManager
-from bq_entity_resolution.watermark.manager import WatermarkManager
 from bq_entity_resolution.config.roles import (
     blocking_keys_for_role,
     comparisons_for_role,
@@ -74,6 +66,12 @@ from bq_entity_resolution.config.roles import (
     features_for_role,
 )
 from bq_entity_resolution.config.schema import PipelineConfig, SourceConfig
+from bq_entity_resolution.exceptions import (
+    ConfigurationError,
+    EntityResolutionError,
+    PipelineAbortError,
+    SQLExecutionError,
+)
 
 # Registries (for custom extensions)
 from bq_entity_resolution.features.registry import (
@@ -118,6 +116,8 @@ from bq_entity_resolution.stages.bqml_classification import (
     FeatureMatrixExportStage,
 )
 from bq_entity_resolution.version import __version__
+from bq_entity_resolution.watermark.checkpoint import CheckpointManager
+from bq_entity_resolution.watermark.manager import WatermarkManager
 
 
 # Lazy imports for backends with optional dependencies

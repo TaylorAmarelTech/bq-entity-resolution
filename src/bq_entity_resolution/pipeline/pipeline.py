@@ -307,6 +307,10 @@ class Pipeline:
             from bq_entity_resolution.naming import job_tracking_table
             jt_table = job_tracking_table(self._config)
 
+        # Cost budget guards from job tracking config
+        cost_alert = getattr(jt, "cost_alert_threshold_bytes", None) if jt else None
+        cost_abort = getattr(jt, "cost_abort_threshold_bytes", None) if jt else None
+
         executor = PipelineExecutor(
             backend=backend,
             quality_gates=self._gates,
@@ -317,6 +321,8 @@ class Pipeline:
             fencing_kwargs=fencing_kwargs,
             job_tracking_table=jt_table,
             job_tracking_enabled=jt_enabled,
+            cost_alert_threshold_bytes=cost_alert,
+            cost_abort_threshold_bytes=cost_abort,
         )
         return executor.execute(
             plan,

@@ -14,6 +14,7 @@ __all__ = [
     "preview_sql",
     "profile",
     "profile_cursors",
+    "profile_placeholders",
     "review_queue",
     "run",
     "validate",

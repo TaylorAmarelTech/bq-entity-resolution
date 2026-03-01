@@ -203,6 +203,57 @@ def nullify_placeholder_phone(inputs: list[str], **_: Any) -> str:
     )
 
 
+@register("nullify_placeholder_name")
+def nullify_placeholder_name(inputs: list[str], **_: Any) -> str:
+    """Nullify placeholder name values.
+
+    Returns NULL if the name matches a known placeholder pattern,
+    otherwise returns the original value. Use as a blocking key input
+    to exclude placeholder names from candidate pair generation.
+
+    OUTPUT TYPE: Same as input column type (STRING or NULL)
+    """
+    col = inputs[0]
+    return (
+        f"CASE WHEN UPPER(TRIM(CAST({col} AS STRING))) IN ("
+        f"'UNKNOWN', 'N/A', 'NA', 'N A', 'TBD', 'TBA', 'PENDING', "
+        f"'TEST', 'TESTING', 'DECEASED', 'DECEDENT', "
+        f"'DO NOT USE', 'DO NOT MAIL', 'DO NOT CONTACT', "
+        f"'NONE', 'NULL', 'DUMMY', 'SAMPLE', 'TEMP', 'TEMPORARY', "
+        f"'GENERAL DELIVERY', 'OCCUPANT', 'CURRENT RESIDENT', 'RESIDENT', "
+        f"'NOT PROVIDED', 'NOT AVAILABLE', 'UNAVAILABLE', 'BLANK', "
+        f"'XXX', 'XXXX', 'XXXXX', 'ZZZ', 'ZZZZ', "
+        f"'JOHN DOE', 'JANE DOE', 'BABY BOY', 'BABY GIRL', "
+        f"'FNU', 'LNU', 'NMN', 'NFN'"
+        f") THEN NULL ELSE {col} END"
+    )
+
+
+@register("nullify_placeholder_address")
+def nullify_placeholder_address(inputs: list[str], **_: Any) -> str:
+    """Nullify placeholder address values.
+
+    Returns NULL if the address matches a known placeholder pattern,
+    otherwise returns the original value. Use as a blocking key input
+    to exclude placeholder addresses from candidate pair generation.
+
+    OUTPUT TYPE: Same as input column type (STRING or NULL)
+    """
+    col = inputs[0]
+    return (
+        f"CASE WHEN UPPER(TRIM(CAST({col} AS STRING))) IN ("
+        f"'123 MAIN ST', '123 MAIN STREET', '000', '0000', "
+        f"'GENERAL DELIVERY', 'NO ADDRESS', 'NONE', 'N/A', 'NA', "
+        f"'UNKNOWN', 'HOMELESS', 'TRANSIENT', 'REFUSED', "
+        f"'NOT PROVIDED', 'NOT AVAILABLE', 'UNAVAILABLE', "
+        f"'PO BOX 0', 'PO BOX 000', 'TEST', 'TEMP', 'TBD'"
+        f") "
+        f"OR REGEXP_CONTAINS(UPPER(TRIM(CAST({col} AS STRING))), "
+        f"r'^0+$') "
+        f"THEN NULL ELSE {col} END"
+    )
+
+
 @register("nullify_placeholder_email")
 def nullify_placeholder_email(inputs: list[str], **_: Any) -> str:
     """Nullify placeholder email addresses.

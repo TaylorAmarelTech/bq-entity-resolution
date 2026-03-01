@@ -246,3 +246,74 @@ class TestNullifyPlaceholderEmail:
     def test_case_insensitive(self):
         sql = FEATURE_FUNCTIONS["nullify_placeholder_email"](["email"])
         assert "LOWER" in sql
+
+
+class TestNullifyPlaceholderName:
+    """Tests for nullify_placeholder_name feature function."""
+
+    def test_registered(self):
+        assert "nullify_placeholder_name" in FEATURE_FUNCTIONS
+
+    def test_returns_case_expression(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_name"](["name"])
+        assert "CASE WHEN" in sql
+        assert "THEN NULL ELSE name END" in sql
+
+    def test_detects_unknown(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_name"](["name"])
+        assert "'UNKNOWN'" in sql
+
+    def test_detects_john_doe(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_name"](["name"])
+        assert "'JOHN DOE'" in sql
+
+    def test_detects_fnu_lnu(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_name"](["name"])
+        assert "'FNU'" in sql
+        assert "'LNU'" in sql
+
+    def test_uses_upper_trim(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_name"](["name"])
+        assert "UPPER(TRIM(" in sql
+
+    def test_matches_is_placeholder_name_patterns(self):
+        flag_sql = FEATURE_FUNCTIONS["is_placeholder_name"](["name"])
+        null_sql = FEATURE_FUNCTIONS["nullify_placeholder_name"](["name"])
+        assert "THEN 1" in flag_sql
+        assert "THEN NULL" in null_sql
+        assert "'DECEASED'" in null_sql
+
+
+class TestNullifyPlaceholderAddress:
+    """Tests for nullify_placeholder_address feature function."""
+
+    def test_registered(self):
+        assert "nullify_placeholder_address" in FEATURE_FUNCTIONS
+
+    def test_returns_case_expression(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_address"](["addr"])
+        assert "CASE WHEN" in sql
+        assert "THEN NULL ELSE addr END" in sql
+
+    def test_detects_123_main_st(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_address"](["addr"])
+        assert "'123 MAIN ST'" in sql
+
+    def test_detects_homeless(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_address"](["addr"])
+        assert "'HOMELESS'" in sql
+
+    def test_detects_all_zeros(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_address"](["addr"])
+        assert "^0+$" in sql
+
+    def test_uses_upper_trim(self):
+        sql = FEATURE_FUNCTIONS["nullify_placeholder_address"](["addr"])
+        assert "UPPER(TRIM(" in sql
+
+    def test_matches_is_placeholder_address_patterns(self):
+        flag_sql = FEATURE_FUNCTIONS["is_placeholder_address"](["addr"])
+        null_sql = FEATURE_FUNCTIONS["nullify_placeholder_address"](["addr"])
+        assert "THEN 1" in flag_sql
+        assert "THEN NULL" in null_sql
+        assert "'GENERAL DELIVERY'" in null_sql

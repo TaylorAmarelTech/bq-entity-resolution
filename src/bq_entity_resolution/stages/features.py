@@ -239,6 +239,12 @@ class FeatureEngineeringStage(Stage):
                 "email": "nullify_placeholder_email",
                 "personal_email": "nullify_placeholder_email",
                 "work_email": "nullify_placeholder_email",
+                "first_name": "nullify_placeholder_name",
+                "last_name": "nullify_placeholder_name",
+                "middle_name": "nullify_placeholder_name",
+                "full_name": "nullify_placeholder_name",
+                "address_line_1": "nullify_placeholder_address",
+                "address_line_2": "nullify_placeholder_address",
             }
             # Build a map of source column name → role
             col_roles: dict[str, str] = {}

@@ -50,5 +50,9 @@ class PipelineAbortError(EntityResolutionError):
     """Pipeline aborted (manual or safety limit)."""
 
 
+class PipelineCostExceededError(PipelineAbortError):
+    """Pipeline aborted because cumulative bytes_billed exceeded threshold."""
+
+
 class LockFencingError(EntityResolutionError):
     """Fencing token mismatch — lock was stolen by another holder."""

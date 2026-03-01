@@ -7,9 +7,8 @@ reconciliation configuration for cross-tier entity resolution.
 
 from __future__ import annotations
 
-from typing import Literal, Self
-
 import re
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 

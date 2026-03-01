@@ -18,8 +18,7 @@ from bq_entity_resolution.config.schema import (
     TrainingConfig,
 )
 from bq_entity_resolution.exceptions import ParameterEstimationError
-from bq_entity_resolution.matching.comparisons import _validated_call
-from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS
+from bq_entity_resolution.matching.comparisons import COMPARISON_FUNCTIONS, _validated_call
 from bq_entity_resolution.naming import (
     candidates_table,
     featured_table,

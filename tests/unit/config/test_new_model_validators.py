@@ -6,7 +6,11 @@ import warnings
 
 import pytest
 
-from bq_entity_resolution.config.models.infrastructure import ScaleConfig
+from bq_entity_resolution.config.models.infrastructure import (
+    JobTrackingConfig,
+    MonitoringConfig,
+    ScaleConfig,
+)
 from bq_entity_resolution.config.models.matching import (
     ComparisonDef,
     ThresholdConfig,
@@ -234,3 +238,61 @@ class TestScaleConfigExpiration:
         """Negative value is rejected."""
         with pytest.raises(ValueError, match="table_expiration_days must be >= 1"):
             ScaleConfig(table_expiration_days=-5)
+
+
+class TestJobTrackingConfigValidators:
+    """Tests for JobTrackingConfig cost threshold validators."""
+
+    def test_none_thresholds_accepted(self):
+        """None is the default for cost thresholds."""
+        config = JobTrackingConfig()
+        assert config.cost_alert_threshold_bytes is None
+        assert config.cost_abort_threshold_bytes is None
+
+    def test_positive_thresholds_accepted(self):
+        """Positive values are accepted."""
+        config = JobTrackingConfig(
+            cost_alert_threshold_bytes=1000,
+            cost_abort_threshold_bytes=5000,
+        )
+        assert config.cost_alert_threshold_bytes == 1000
+        assert config.cost_abort_threshold_bytes == 5000
+
+    def test_zero_alert_threshold_rejected(self):
+        """Zero cost threshold is rejected."""
+        with pytest.raises(ValueError, match="cost threshold must be >= 1"):
+            JobTrackingConfig(cost_alert_threshold_bytes=0)
+
+    def test_negative_abort_threshold_rejected(self):
+        """Negative cost threshold is rejected."""
+        with pytest.raises(ValueError, match="cost threshold must be >= 1"):
+            JobTrackingConfig(cost_abort_threshold_bytes=-1)
+
+
+class TestMonitoringConfigValidators:
+    """Tests for MonitoringConfig min_data_quality_score validator."""
+
+    def test_default_zero(self):
+        """Default value is 0 (disabled)."""
+        config = MonitoringConfig()
+        assert config.min_data_quality_score == 0
+
+    def test_valid_score(self):
+        """Score within range accepted."""
+        config = MonitoringConfig(min_data_quality_score=50)
+        assert config.min_data_quality_score == 50
+
+    def test_max_score(self):
+        """Score of 100 accepted."""
+        config = MonitoringConfig(min_data_quality_score=100)
+        assert config.min_data_quality_score == 100
+
+    def test_negative_score_rejected(self):
+        """Negative score rejected."""
+        with pytest.raises(ValueError, match="min_data_quality_score must be"):
+            MonitoringConfig(min_data_quality_score=-1)
+
+    def test_over_100_rejected(self):
+        """Score over 100 rejected."""
+        with pytest.raises(ValueError, match="min_data_quality_score must be"):
+            MonitoringConfig(min_data_quality_score=101)

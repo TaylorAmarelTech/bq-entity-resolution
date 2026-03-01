@@ -18,6 +18,11 @@ from bq_entity_resolution.sql.builders.blocking import (
     build_blocking_metrics_sql,
     build_blocking_sql,
 )
+from bq_entity_resolution.sql.builders.blocking_effectiveness import (
+    BlockingEffectivenessParams,
+    TierEffectivenessParams,
+    build_blocking_effectiveness_sql,
+)
 from bq_entity_resolution.sql.builders.clustering import (
     ClusteringParams,
     ClusterMetricsParams,
@@ -62,8 +67,10 @@ from bq_entity_resolution.sql.builders.golden_record import (
 )
 from bq_entity_resolution.sql.builders.job_tracking import (
     JobDetail,
+    RunComparisonParams,
     build_create_job_tracking_table_sql,
     build_insert_job_details_sql,
+    build_run_comparison_sql,
     compute_sql_hash,
 )
 from bq_entity_resolution.sql.builders.monitoring import build_persist_sql_log_sql
@@ -93,8 +100,11 @@ __all__ = [
     # Blocking
     "build_blocking_sql",
     "build_blocking_metrics_sql",
+    "build_blocking_effectiveness_sql",
     "BlockingParams",
     "BlockingMetricsParams",
+    "BlockingEffectivenessParams",
+    "TierEffectivenessParams",
     # Comparison / Scoring
     "build_sum_scoring_sql",
     "build_fellegi_sunter_sql",
@@ -142,8 +152,10 @@ __all__ = [
     # Job Tracking
     "build_create_job_tracking_table_sql",
     "build_insert_job_details_sql",
+    "build_run_comparison_sql",
     "compute_sql_hash",
     "JobDetail",
+    "RunComparisonParams",
     # Placeholder Tracking
     "build_create_placeholder_table_sql",
     "build_placeholder_scan_sql",

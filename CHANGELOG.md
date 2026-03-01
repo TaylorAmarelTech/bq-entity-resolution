@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Placeholder nullification for name/address roles: `nullify_placeholder_name` and `nullify_placeholder_address` feature functions with auto-injection for first_name, last_name, middle_name, full_name, address_line_1, address_line_2 roles
+- Per-run cost alerting and budget guards: `cost_alert_threshold_bytes` (warning) and `cost_abort_threshold_bytes` (abort) on `JobTrackingConfig` with cumulative tracking in `PipelineExecutor`
+- Run comparison queries: `build_run_comparison_sql()` FULL OUTER JOINs two pipeline runs by `sql_hash` showing bytes_billed_delta, duration_delta, and comparison_status (NEW/REMOVED/MATCHED)
+- Blocking key effectiveness dashboard: `build_blocking_effectiveness_sql()` produces cross-tier UNION ALL with reduction_ratio, avg/max candidates_per_entity, and cartesian_baseline
+- Placeholder auto-detection via profiling: `PlaceholderProfiler` class + `bq-er profile-placeholders` CLI command scanning source data for known and suspected placeholder values with YAML snippet generation
+- Data quality score: `DataQualityScorer` computes 0-100 aggregate metric from placeholder rates, null rates, and blocking effectiveness; `DataQualityScoreGate` integrates with pipeline quality gates
+- `PipelineCostExceededError` exception for budget guard enforcement
+- `min_data_quality_score` config option on `MonitoringConfig` (0-100, 0=disabled)
 - Extensibility APIs: `Pipeline.from_stages()`, `stage_overrides`, `exclude_stages`, `dag_builder`
 - Entry point plugins for features (`bq_er.features`) and comparisons (`bq_er.comparisons`)
 - Entity type templates (19 built-in: Person, Organization, PostalAddress, InsuredEntity, FinancialAccount, Patient, Thing, Subscriber, ServiceLocation, Carrier, Property, Vehicle, Device, Merchant, Student, Guest, Claimant, Vendor, DigitalIdentity) with schema.org aliases and hierarchy resolution

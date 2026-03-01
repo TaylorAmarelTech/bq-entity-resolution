@@ -374,9 +374,22 @@ class JobTrackingConfig(BaseModel):
     ``pipeline_job_details`` table in the metadata dataset.
 
     Use for cost monitoring, performance analysis, and capacity planning.
+
+    Cost thresholds provide per-run cumulative budget guards:
+    - ``cost_alert_threshold_bytes``: log warning when exceeded
+    - ``cost_abort_threshold_bytes``: abort pipeline when exceeded
     """
 
     enabled: bool = False
+    cost_alert_threshold_bytes: int | None = None
+    cost_abort_threshold_bytes: int | None = None
+
+    @field_validator("cost_alert_threshold_bytes", "cost_abort_threshold_bytes")
+    @classmethod
+    def _positive_cost_thresholds(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError("cost threshold must be >= 1 if set")
+        return v
 
 
 class PlaceholderTrackingConfig(BaseModel):
@@ -415,6 +428,14 @@ class MonitoringConfig(BaseModel):
         default_factory=PlaceholderTrackingConfig
     )
     persist_sql_log: bool = False  # Write sql_log to BQ table after run
+    min_data_quality_score: int = 0  # 0 = disabled; 1-100 = gate threshold
+
+    @field_validator("min_data_quality_score")
+    @classmethod
+    def _valid_quality_score(cls, v: int) -> int:
+        if v < 0 or v > 100:
+            raise ValueError("min_data_quality_score must be in [0, 100]")
+        return v
 
 
 # ---------------------------------------------------------------------------

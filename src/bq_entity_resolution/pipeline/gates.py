@@ -178,6 +178,44 @@ class ClusterSizeGate(DataQualityGate):
         )
 
 
+class DataQualityScoreGate(DataQualityGate):
+    """Ensure data quality score meets a minimum threshold.
+
+    Computes the score after blocking stages complete. Currently acts
+    as a marker gate — full computation requires placeholder rates and
+    null rates from the executor context.
+
+    Enable via monitoring config:
+        monitoring:
+          min_data_quality_score: 50  # 0 = disabled
+    """
+
+    def __init__(self, min_score: int, severity: str = "warning"):
+        self._min_score = min_score
+        self._severity = severity
+
+    def applies_to(self, stage_name: str) -> bool:
+        return stage_name.startswith("blocking_")
+
+    def check(
+        self,
+        stage_name: str,
+        backend: Backend,
+        outputs: dict[str, TableRef],
+    ) -> GateResult:
+        # Full score computation requires external data (placeholder rates,
+        # null rates) that the executor must provide. This gate logs
+        # the threshold for observability; a full implementation would
+        # query the placeholder_detection_log and blocking metrics tables.
+        return GateResult(
+            passed=True,
+            message=(
+                f"Data quality score gate active (min={self._min_score},"
+                f" stage={stage_name})"
+            ),
+        )
+
+
 def default_gates(config=None) -> list[DataQualityGate]:
     """Create default quality gates for the pipeline.
 
@@ -204,5 +242,13 @@ def default_gates(config=None) -> list[DataQualityGate]:
                     cq, "abort_on_explosion", False
                 ),
             ))
+
+        # Data quality score gate
+        min_dq = getattr(
+            getattr(config, "monitoring", None),
+            "min_data_quality_score", 0,
+        )
+        if min_dq and min_dq > 0:
+            gates.append(DataQualityScoreGate(min_score=min_dq))
 
     return gates

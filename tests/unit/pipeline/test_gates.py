@@ -3,6 +3,7 @@
 
 from bq_entity_resolution.pipeline.gates import (
     ClusterSizeGate,
+    DataQualityScoreGate,
     GateResult,
     OutputNotEmptyGate,
     default_gates,
@@ -191,3 +192,49 @@ class TestDefaultGates:
             g for g in gates if isinstance(g, ClusterSizeGate)
         ]
         assert len(cluster_gates) == 1
+
+
+class TestDataQualityScoreGate:
+    """Tests for DataQualityScoreGate."""
+
+    def test_applies_to_blocking_stages(self):
+        gate = DataQualityScoreGate(min_score=50)
+        assert gate.applies_to("blocking_tier0") is True
+        assert gate.applies_to("blocking_exact") is True
+        assert gate.applies_to("matching_tier0") is False
+        assert gate.applies_to("clustering") is False
+
+    def test_check_passes(self):
+        gate = DataQualityScoreGate(min_score=50)
+        result = gate.check("blocking_tier0", None, {})
+        assert result.passed is True
+
+    def test_included_in_default_gates_when_enabled(self):
+        class NS:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+
+        config = NS(
+            monitoring=NS(
+                cluster_quality=NS(enabled=False),
+                min_data_quality_score=50,
+            )
+        )
+        gates = default_gates(config)
+        dq_gates = [g for g in gates if isinstance(g, DataQualityScoreGate)]
+        assert len(dq_gates) == 1
+
+    def test_excluded_from_default_gates_when_zero(self):
+        class NS:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+
+        config = NS(
+            monitoring=NS(
+                cluster_quality=NS(enabled=False),
+                min_data_quality_score=0,
+            )
+        )
+        gates = default_gates(config)
+        dq_gates = [g for g in gates if isinstance(g, DataQualityScoreGate)]
+        assert len(dq_gates) == 0

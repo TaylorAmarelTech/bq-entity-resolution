@@ -292,3 +292,95 @@ class TestStageExecutionResult:
         assert r.success is True
         assert r.skipped is False
         assert r.error is None
+
+
+class TestCostAlertingBudgetGuards:
+    """Tests for per-run cumulative cost threshold enforcement."""
+
+    def test_abort_threshold_raises_error(self):
+        """PipelineCostExceededError raised when abort threshold exceeded."""
+        from unittest.mock import MagicMock
+
+        from bq_entity_resolution.exceptions import PipelineCostExceededError
+
+        backend = MagicMock()
+        # Simulate query returning 10GB billed
+        qr = MagicMock()
+        qr.bytes_billed = 10_000_000_000
+        qr.rows_affected = 100
+        qr.job_id = "j1"
+        qr.total_bytes_processed = 10_000_000_000
+        qr.slot_milliseconds = 500
+        backend.execute.return_value = qr
+
+        executor = PipelineExecutor(
+            backend=backend,
+            cost_abort_threshold_bytes=5_000_000_000,  # 5GB
+        )
+
+        plan = MagicMock()
+        plan.stages = [MagicMock()]
+        plan.stages[0].stage_name = "staging_test"
+        plan.stages[0].sql_count = 1
+        expr = MagicMock()
+        expr.render.return_value = "SELECT 1"
+        plan.stages[0].sql_expressions = [expr]
+        plan.stages[0].outputs = {}
+
+        with pytest.raises(PipelineCostExceededError, match="exceeds abort"):
+            executor.execute(plan, run_id="test-run")
+
+    def test_alert_threshold_logs_warning(self):
+        """Warning logged when alert threshold exceeded."""
+        from unittest.mock import MagicMock
+
+        backend = MagicMock()
+        qr = MagicMock()
+        qr.bytes_billed = 1_000_000
+        qr.rows_affected = 10
+        qr.job_id = "j1"
+        qr.total_bytes_processed = 1_000_000
+        qr.slot_milliseconds = 100
+        backend.execute.return_value = qr
+
+        executor = PipelineExecutor(
+            backend=backend,
+            cost_alert_threshold_bytes=500_000,  # 500KB
+        )
+
+        plan = MagicMock()
+        plan.stages = [MagicMock()]
+        plan.stages[0].stage_name = "staging_test"
+        plan.stages[0].sql_count = 1
+        expr = MagicMock()
+        expr.render.return_value = "SELECT 1"
+        plan.stages[0].sql_expressions = [expr]
+        plan.stages[0].outputs = {}
+
+        executor.execute(plan, run_id="test-run")
+
+        # Verify the alert was fired (warning logged, no exception)
+        assert executor._cost_alert_fired is True
+        assert executor._cumulative_bytes_billed == 1_000_000
+
+    def test_no_threshold_no_error(self):
+        """No error when thresholds are None."""
+        from unittest.mock import MagicMock
+
+        executor = PipelineExecutor(
+            backend=MagicMock(),
+        )
+        assert executor._cost_alert_threshold is None
+        assert executor._cost_abort_threshold is None
+        assert executor._cumulative_bytes_billed == 0
+
+    def test_cumulative_tracking_initialized_to_zero(self):
+        """Cumulative bytes starts at 0."""
+        from unittest.mock import MagicMock
+
+        executor = PipelineExecutor(
+            backend=MagicMock(),
+            cost_abort_threshold_bytes=1000,
+        )
+        assert executor._cumulative_bytes_billed == 0
+        assert executor._cost_alert_fired is False

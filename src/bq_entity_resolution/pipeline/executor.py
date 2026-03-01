@@ -194,6 +194,8 @@ class PipelineExecutor:
         redact_sql_logs: bool = True,
         job_tracking_table: str | None = None,
         job_tracking_enabled: bool = False,
+        cost_alert_threshold_bytes: int | None = None,
+        cost_abort_threshold_bytes: int | None = None,
     ):
         self.backend = backend
         self.quality_gates = quality_gates or []
@@ -210,6 +212,11 @@ class PipelineExecutor:
         self._job_tracking_table = job_tracking_table
         self._job_tracking_enabled = job_tracking_enabled
         self._job_details: list[JobDetail] = []
+        # Per-run cumulative cost budget guards
+        self._cost_alert_threshold = cost_alert_threshold_bytes
+        self._cost_abort_threshold = cost_abort_threshold_bytes
+        self._cumulative_bytes_billed: int = 0
+        self._cost_alert_fired: bool = False
 
     def execute(
         self,
@@ -291,9 +298,35 @@ class PipelineExecutor:
                         f"{stage_result.error}"
                     ) from original
 
-                # Check pipeline-level cost ceiling
+                # Check pipeline-level cost ceiling (per-query)
                 if self._max_cost_bytes and hasattr(self.backend, "check_cost_ceiling"):
                     self.backend.check_cost_ceiling(self._max_cost_bytes)
+
+                # Per-run cumulative cost budget guards
+                if (
+                    self._cost_abort_threshold
+                    and self._cumulative_bytes_billed > self._cost_abort_threshold
+                ):
+                    from bq_entity_resolution.exceptions import (
+                        PipelineCostExceededError,
+                    )
+                    raise PipelineCostExceededError(
+                        f"Pipeline cumulative bytes_billed "
+                        f"({self._cumulative_bytes_billed:,}) exceeds abort "
+                        f"threshold ({self._cost_abort_threshold:,})"
+                    )
+                if (
+                    self._cost_alert_threshold
+                    and not self._cost_alert_fired
+                    and self._cumulative_bytes_billed > self._cost_alert_threshold
+                ):
+                    self._cost_alert_fired = True
+                    logger.warning(
+                        "Cost alert: cumulative bytes_billed %d exceeds "
+                        "threshold %d",
+                        self._cumulative_bytes_billed,
+                        self._cost_alert_threshold,
+                    )
 
                 # Run quality gates BEFORE checkpoint (so failed gates
                 # are not persisted as completed on resume)
@@ -459,6 +492,9 @@ class PipelineExecutor:
                     ))
 
                 stage_result.rows_affected += query_result.rows_affected
+
+                # Accumulate per-run cost for budget guards
+                self._cumulative_bytes_billed += query_result.bytes_billed
 
                 # Per-SQL health probe heartbeat so K8s doesn't
                 # think a long-running stage is hung

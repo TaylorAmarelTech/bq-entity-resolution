@@ -13,13 +13,13 @@ from decimal import Decimal
 from typing import Any
 
 from bq_entity_resolution.exceptions import LockFencingError, WatermarkError
-from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
 from bq_entity_resolution.sql.builders.watermark import (
     build_create_watermark_table_sql,
     build_fenced_watermark_update_sql,
     build_read_watermark_sql,
     build_update_watermark_sql,
 )
+from bq_entity_resolution.sql.utils import validate_identifier, validate_table_ref
 
 logger = logging.getLogger(__name__)
 

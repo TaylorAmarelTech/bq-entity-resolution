@@ -55,7 +55,10 @@ class ColumnMapping(BaseModel):
         return v
 
 
-_SQL_INJECTION_PATTERN = re.compile(r";\s*|--\s|/\*|\bDROP\b|\bALTER\b|\bCREATE\b|\bTRUNCATE\b|\bGRANT\b|\bREVOKE\b", re.IGNORECASE)
+_SQL_INJECTION_PATTERN = re.compile(
+    r";\s*|--\s|/\*|\bDROP\b|\bALTER\b|\bCREATE\b|\bTRUNCATE\b|\bGRANT\b|\bREVOKE\b",
+    re.IGNORECASE,
+)
 
 
 class JoinConfig(BaseModel):

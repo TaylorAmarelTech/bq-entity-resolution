@@ -124,3 +124,78 @@ def build_insert_job_details_sql(
 
     lines.append(",\n".join(value_rows))
     return SQLExpression.from_raw("\n".join(lines))
+
+
+@dataclass(frozen=True)
+class RunComparisonParams:
+    """Parameters for comparing two pipeline runs by sql_hash."""
+
+    job_tracking_table: str
+    run_id_a: str
+    run_id_b: str
+
+    def __post_init__(self) -> None:
+        validate_table_ref(self.job_tracking_table)
+
+
+def build_run_comparison_sql(params: RunComparisonParams) -> SQLExpression:
+    """Build SQL to compare two pipeline runs by sql_hash.
+
+    Generates a FULL OUTER JOIN on sql_hash computing byte and duration
+    deltas and percentage changes between runs. Each row includes a
+    comparison_status: NEW (only in run_b), REMOVED (only in run_a),
+    or MATCHED (in both).
+    """
+    table = params.job_tracking_table
+    escaped_a = sql_escape(params.run_id_a)
+    escaped_b = sql_escape(params.run_id_b)
+
+    sql = (
+        f"WITH run_a AS (\n"
+        f"  SELECT {JOB_TRACKING_STAGE_NAME}, {JOB_TRACKING_SQL_HASH},\n"
+        f"    {JOB_TRACKING_BYTES_BILLED}, {JOB_TRACKING_DURATION_SECONDS},\n"
+        f"    {JOB_TRACKING_SLOT_MILLISECONDS}, {JOB_TRACKING_ROWS_AFFECTED}\n"
+        f"  FROM `{table}`\n"
+        f"  WHERE {JOB_TRACKING_RUN_ID} = '{escaped_a}'\n"
+        f"),\n"
+        f"run_b AS (\n"
+        f"  SELECT {JOB_TRACKING_STAGE_NAME}, {JOB_TRACKING_SQL_HASH},\n"
+        f"    {JOB_TRACKING_BYTES_BILLED}, {JOB_TRACKING_DURATION_SECONDS},\n"
+        f"    {JOB_TRACKING_SLOT_MILLISECONDS}, {JOB_TRACKING_ROWS_AFFECTED}\n"
+        f"  FROM `{table}`\n"
+        f"  WHERE {JOB_TRACKING_RUN_ID} = '{escaped_b}'\n"
+        f")\n"
+        f"SELECT\n"
+        f"  COALESCE(a.{JOB_TRACKING_STAGE_NAME}, b.{JOB_TRACKING_STAGE_NAME})"
+        f" AS {JOB_TRACKING_STAGE_NAME},\n"
+        f"  COALESCE(a.{JOB_TRACKING_SQL_HASH}, b.{JOB_TRACKING_SQL_HASH})"
+        f" AS {JOB_TRACKING_SQL_HASH},\n"
+        f"  a.{JOB_TRACKING_BYTES_BILLED} AS bytes_billed_a,\n"
+        f"  b.{JOB_TRACKING_BYTES_BILLED} AS bytes_billed_b,\n"
+        f"  IFNULL(b.{JOB_TRACKING_BYTES_BILLED}, 0)"
+        f" - IFNULL(a.{JOB_TRACKING_BYTES_BILLED}, 0)"
+        f" AS bytes_billed_delta,\n"
+        f"  SAFE_DIVIDE(\n"
+        f"    IFNULL(b.{JOB_TRACKING_BYTES_BILLED}, 0)"
+        f" - IFNULL(a.{JOB_TRACKING_BYTES_BILLED}, 0),\n"
+        f"    NULLIF(a.{JOB_TRACKING_BYTES_BILLED}, 0)\n"
+        f"  ) AS bytes_billed_pct_change,\n"
+        f"  a.{JOB_TRACKING_DURATION_SECONDS} AS duration_a,\n"
+        f"  b.{JOB_TRACKING_DURATION_SECONDS} AS duration_b,\n"
+        f"  IFNULL(b.{JOB_TRACKING_DURATION_SECONDS}, 0)"
+        f" - IFNULL(a.{JOB_TRACKING_DURATION_SECONDS}, 0)"
+        f" AS duration_delta,\n"
+        f"  a.{JOB_TRACKING_SLOT_MILLISECONDS} AS slots_a,\n"
+        f"  b.{JOB_TRACKING_SLOT_MILLISECONDS} AS slots_b,\n"
+        f"  CASE\n"
+        f"    WHEN a.{JOB_TRACKING_SQL_HASH} IS NULL THEN 'NEW'\n"
+        f"    WHEN b.{JOB_TRACKING_SQL_HASH} IS NULL THEN 'REMOVED'\n"
+        f"    ELSE 'MATCHED'\n"
+        f"  END AS comparison_status\n"
+        f"FROM run_a a\n"
+        f"FULL OUTER JOIN run_b b\n"
+        f"  ON a.{JOB_TRACKING_SQL_HASH} = b.{JOB_TRACKING_SQL_HASH}\n"
+        f"ORDER BY COALESCE(a.{JOB_TRACKING_STAGE_NAME},"
+        f" b.{JOB_TRACKING_STAGE_NAME})"
+    )
+    return SQLExpression.from_raw(sql)

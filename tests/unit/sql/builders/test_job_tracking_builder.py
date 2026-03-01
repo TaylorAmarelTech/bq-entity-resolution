@@ -6,8 +6,10 @@ import pytest
 
 from bq_entity_resolution.sql.builders.job_tracking import (
     JobDetail,
+    RunComparisonParams,
     build_create_job_tracking_table_sql,
     build_insert_job_details_sql,
+    build_run_comparison_sql,
     compute_sql_hash,
 )
 
@@ -168,3 +170,57 @@ class TestJobDetailDataclass:
         )
         with pytest.raises(AttributeError):
             detail.stage_name = "new"  # type: ignore[misc]
+
+
+class TestRunComparisonSql:
+    """Tests for run comparison SQL builder."""
+
+    def test_generates_full_outer_join(self):
+        params = RunComparisonParams(
+            job_tracking_table="proj.ds.pipeline_job_details",
+            run_id_a="run_20240101",
+            run_id_b="run_20240102",
+        )
+        sql = build_run_comparison_sql(params).render()
+        assert "FULL OUTER JOIN" in sql
+        assert "run_a" in sql
+        assert "run_b" in sql
+
+    def test_computes_deltas(self):
+        params = RunComparisonParams(
+            job_tracking_table="proj.ds.pipeline_job_details",
+            run_id_a="run_a",
+            run_id_b="run_b",
+        )
+        sql = build_run_comparison_sql(params).render()
+        assert "bytes_billed_delta" in sql
+        assert "duration_delta" in sql
+        assert "bytes_billed_pct_change" in sql
+
+    def test_comparison_status(self):
+        params = RunComparisonParams(
+            job_tracking_table="proj.ds.pipeline_job_details",
+            run_id_a="run_a",
+            run_id_b="run_b",
+        )
+        sql = build_run_comparison_sql(params).render()
+        assert "'NEW'" in sql
+        assert "'REMOVED'" in sql
+        assert "'MATCHED'" in sql
+
+    def test_validates_table_ref(self):
+        with pytest.raises(ValueError):
+            RunComparisonParams(
+                job_tracking_table="invalid",
+                run_id_a="a",
+                run_id_b="b",
+            )
+
+    def test_escapes_run_ids(self):
+        params = RunComparisonParams(
+            job_tracking_table="proj.ds.pipeline_job_details",
+            run_id_a="run's_a",
+            run_id_b="run_b",
+        )
+        sql = build_run_comparison_sql(params).render()
+        assert "run''s_a" in sql
