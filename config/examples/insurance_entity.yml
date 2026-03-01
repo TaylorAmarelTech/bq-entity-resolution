@@ -10,7 +10,7 @@ version: "1.0"
 
 project:
   name: "insurance_entity_resolution"
-  description: "Resolve insured entities across IVANS policy records"
+  description: "Resolve insured entities across policy records"
   bq_project: "${BQ_PROJECT}"
   bq_dataset_bronze: "er_bronze"
   bq_dataset_silver: "er_silver"
@@ -23,7 +23,7 @@ project:
 # ---------------------------------------------------------------------------
 sources:
   - name: "policy_holders"
-    table: "${BQ_PROJECT}.raw_ivans.insured_entities"
+    table: "${BQ_PROJECT}.raw_insurance.insured_entities"
     unique_key: "record_id"
     updated_at: "create_date"
     partition_column: "create_date"

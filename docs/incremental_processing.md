@@ -929,7 +929,7 @@ This section walks through a real-world configuration for an insurance entity re
 
 ### Scenario
 
-- **Source:** IVANS policy records, 28M+ new/updated records per day
+- **Source:** Insurance policy records, 28M+ new/updated records per day
 - **Granularity:** All records for a given day share the same `source_date`
 - **Secondary column:** `source_policyid` (integer, values 1-999 per date)
 - **Goal:** Resolve insured entities across policy records into unique canonical entities
@@ -950,7 +950,7 @@ project:
 
 sources:
   - name: "policy_holders"
-    table: "${BQ_PROJECT}.raw_ivans.insured_entities"
+    table: "${BQ_PROJECT}.raw_insurance.insured_entities"
     unique_key: "record_id"
     updated_at: "source_date"
     columns:
@@ -1121,7 +1121,7 @@ SELECT
   source_date AS source_updated_at,
   CURRENT_TIMESTAMP() AS pipeline_loaded_at
 
-FROM `project.raw_ivans.insured_entities` AS src
+FROM `project.raw_insurance.insured_entities` AS src
 WHERE 1=1
 AND (
   source_date > TIMESTAMP_SUB(TIMESTAMP('2024-01-15T00:00:00Z'), INTERVAL 48 HOUR)
